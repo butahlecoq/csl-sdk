@@ -710,8 +710,7 @@ class StrategyAExecutionRunner final : public SynthesisWorkspace,
                 result.complete_proposal =
                     CompleteFamilyProposal{proposal_identity, std::move(family)};
             }
-            if (nominal_exact && result.termination == Termination::completed &&
-                minimized.optimization) {
+            if (nominal_exact && result.termination == Termination::completed) {
                 const SymbolicArgument statement{
                     "bounded nominal linear exact-H profile",
                     "The selected compiled verifier reconstructs the complete nominal feasible-history relation and checks the exact minimizing face over the stored binary64 dyadic values."};
