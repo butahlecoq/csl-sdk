@@ -9,7 +9,7 @@ Use this repository for the C++ library, its CMake package and runnable examples
 
 Build an observed-state controller, run it beside an open-loop plan, and inspect the first step at which their controls differ. You need Git, CMake/CTest 3.31 or newer and a C++20 compiler. On Windows, use a Visual Studio developer shell with CMake installed. The first configure downloads the pinned HiGHS and Qhull dependencies. CI exercises this default profile on Ubuntu.
 
-Run in PowerShell or a POSIX shell. The installation prefix stays inside your checkout.
+Run in PowerShell or a POSIX shell. The installation prefix stays inside your checkout. Installation is a local development check, not a binary distribution license grant.
 
 ```sh
 git clone https://github.com/butahlecoq/csl-sdk.git
@@ -55,3 +55,5 @@ target_link_libraries(my_controller PRIVATE CSL::controllers CSL::model_catalogu
 The [example CMake project](examples/CMakeLists.txt) uses the installed targets.
 The [native source modules](src), [public headers](include/csl), [schemas](schemas),
 and [tests](tests) accompany the SDK. The [research repository](https://github.com/butahlecoq/controlled-systems-lab) owns experiment drivers, comparison datasets, teaching pages and historical evidence.
+
+The original SDK extraction and source baseline are recorded in [research issue #1082](https://github.com/butahlecoq/controlled-systems-lab/issues/1082).
