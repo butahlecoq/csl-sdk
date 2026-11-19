@@ -1,9 +1,9 @@
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <csl/model/catalogue.hpp>
 #include <csl/model/linear_system.hpp>
 
 #include <algorithm>
+#include <ostream>
 #include <set>
 #include <utility>
 

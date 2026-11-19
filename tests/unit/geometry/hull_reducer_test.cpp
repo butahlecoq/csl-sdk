@@ -1,9 +1,9 @@
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <csl/adapters/lp/highs.hpp>
 #include <csl/geometry/hull_reducer.hpp>
 #include <csl/geometry/basis_reuse_reducer.hpp>
 #include "../../../src/geometry/exact_convex_combination.hpp"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <csl/registry/provider.hpp>

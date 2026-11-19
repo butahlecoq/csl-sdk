@@ -1,4 +1,3 @@
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <csl/model/flexible_pitch.hpp>
 #include <csl/model/linear_system.hpp>
@@ -6,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <ostream>
 
 namespace {
 template <class T, class... Errors> T take(std::variant<T, Errors...> value) {

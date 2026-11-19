@@ -1,4 +1,4 @@
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <ostream>
 #include <doctest/doctest.h>
 #include <csl/model/spatial_flight.hpp>
 #include <csl/model/spatial_flight_catalogue.hpp>

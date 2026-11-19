@@ -1,9 +1,9 @@
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <csl/registry/registry.hpp>
 #include <csl/registry/provider.hpp>
 #include <csl/registry/strategy_catalogue.hpp>
 #include <csl/optimization/history_optimizer.hpp>
+#include <algorithm>
 #include <limits>
 #include <functional>
 #include <set>
