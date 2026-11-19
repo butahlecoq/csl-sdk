@@ -700,10 +700,10 @@ struct Binary64Bracket {
 
 inline Binary64Bracket bracket_binary64(ExactRational magnitude, std::size_t max_bits) {
     using Status = Binary64BracketStatus;
-    if (exact_detail::is_zero(magnitude.numerator))
-        return {Status::finite};
     if (magnitude.denominator.negative || exact_detail::is_zero(magnitude.denominator))
         return {Status::invalid};
+    if (exact_detail::is_zero(magnitude.numerator))
+        return {Status::finite};
 
     const bool negative = magnitude.numerator.negative;
     magnitude.numerator.negative = false;

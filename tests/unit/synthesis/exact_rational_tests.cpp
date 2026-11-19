@@ -114,3 +114,21 @@ TEST_CASE("binary64 enclosure is directed for exact and fractional bounds") {
     CHECK(exact_h::bracket_binary64(ExactRational{one, three, 0}, 1).status ==
           Binary64BracketStatus::arithmetic_budget);
 }
+
+TEST_CASE("binary64 enclosure validates the denominator for zero") {
+    using exact_h::Binary64BracketStatus;
+    using exact_h::ExactRational;
+    const auto one = exact_h::exact_detail::from_u64(1);
+    const auto zero = exact_h::bracket_binary64(ExactRational{{}, one, 0}, 8192);
+    REQUIRE(zero.status == Binary64BracketStatus::finite);
+    CHECK(zero.lower == 0.0);
+    CHECK(zero.upper == 0.0);
+
+    auto negative_denominator = one;
+    negative_denominator.negative = true;
+
+    CHECK(exact_h::bracket_binary64(ExactRational{{}, {}, 0}, 8192).status ==
+          Binary64BracketStatus::invalid);
+    CHECK(exact_h::bracket_binary64(ExactRational{{}, negative_denominator, 0}, 8192).status ==
+          Binary64BracketStatus::invalid);
+}
