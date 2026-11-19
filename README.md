@@ -3,7 +3,7 @@
 Compute reachable sets and try constrained feedback controllers on discrete-time models.
 The first example uses a two-state plant to show when the next observation changes the control.
 
-Use this repository for the C++ library, its CMake package and runnable examples. The research project hosts the [illustrated learning book](https://butahlecoq.github.io/controlled-systems-lab/learn/), [numerical reports](https://butahlecoq.github.io/controlled-systems-lab/) and [historical releases](https://github.com/butahlecoq/controlled-systems-lab/releases/tag/v0.1.0).
+Use this repository for the C++ library, its CMake package and runnable examples. The research project hosts the [illustrated learning book](https://butahlecoq.github.io/controlled-systems-lab/learn/), [numerical reports](https://butahlecoq.github.io/controlled-systems-lab/archive.html) and [historical releases](https://github.com/butahlecoq/controlled-systems-lab/releases/tag/v0.1.0).
 
 ## Quick start
 
