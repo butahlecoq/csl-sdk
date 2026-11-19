@@ -100,15 +100,6 @@
         "csl_geometry_checks"
       ],
       "jobs": 4
-    },
-    {
-      "name": "reporting",
-      "configurePreset": "dev",
-      "configuration": "Release",
-      "targets": [
-        "csl_reporting_checks"
-      ],
-      "jobs": 4
     }
   ],
   "testPresets": [
@@ -179,22 +170,6 @@
       "filter": {
         "include": {
           "label": "^geometry$"
-        }
-      },
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "noTestsAction": "error"
-      }
-    },
-    {
-      "name": "reporting",
-      "configurePreset": "dev",
-      "configuration": "Release",
-      "filter": {
-        "include": {
-          "label": "^reporting$"
         }
       },
       "output": {
