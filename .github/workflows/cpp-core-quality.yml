@@ -61,8 +61,9 @@ jobs:
       OPENBLAS_NUM_THREADS: '1'
       OMP_NUM_THREADS: '1'
       MKL_NUM_THREADS: '1'
-      BUILD_ROOT: build/cpp-quality-${{ matrix.profile }}
     steps:
+      - name: Allocate the build outside the source checkout
+        run: printf 'BUILD_ROOT=%s/cpp-quality-%s\n' "$RUNNER_TEMP" "${{ matrix.profile }}" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
@@ -102,9 +103,9 @@ jobs:
       - name: Qualify the actual CasADi installed consumers
         if: matrix.profile == 'casadi'
         run: |
-          cmake --install "$BUILD_ROOT" --prefix "$PWD/$BUILD_ROOT/prefix"
-          cmake -DCSL_SOURCE_DIR="$PWD" -DCSL_INSTALL_PREFIX="$PWD/$BUILD_ROOT/prefix" \
-            -DCSL_WORK_DIR="$PWD/$BUILD_ROOT/casadi-consumer" -DCSL_CASADI_DIR="$CASADI_CMAKE_DIR" \
+          cmake --install "$BUILD_ROOT" --prefix "$BUILD_ROOT/prefix"
+          cmake -DCSL_SOURCE_DIR="$PWD" -DCSL_INSTALL_PREFIX="$BUILD_ROOT/prefix" \
+            -DCSL_WORK_DIR="$BUILD_ROOT/casadi-consumer" -DCSL_CASADI_DIR="$CASADI_CMAKE_DIR" \
             -DCSL_EXPORT_COMPILE_COMMANDS=ON -P cmake/RunCasadiInstalledClient.cmake
       - name: Analyze real commands and compiled header dependencies
         run: python scripts/ci/check_cpp_quality.py analyze --build "$BUILD_ROOT" --receipt "$BUILD_ROOT/cpp-quality-receipt.json"
