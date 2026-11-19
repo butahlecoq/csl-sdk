@@ -1,0 +1,48 @@
+#pragma once
+
+#include <csl/synthesis/contracts.hpp>
+#include <csl/reachability/nominal_forward.hpp>
+#include <csl/synthesis/control_recovery.hpp>
+#include <csl/synthesis/terminal_minimizers.hpp>
+#include <csl/optimization/history_optimizer.hpp>
+#include <csl/artifacts/run_statistics.hpp>
+
+namespace csl::synthesis::strategy_a {
+// Timing span IDs owned by Strategy A. Callers who enable timing include
+// these IDs in the CollectionPlan with parent-child relationships matching
+// the nested execution phases below.
+namespace timing {
+inline constexpr artifacts::SpanId run{0};
+inline constexpr artifacts::SpanId forward{1};
+inline constexpr artifacts::SpanId feasible_preimage{2};
+inline constexpr artifacts::SpanId terminal_optimization{3};
+inline constexpr artifacts::SpanId terminal_preimage{4};
+inline constexpr artifacts::SpanId family_construction{5};
+}
+enum class PreimageTarget { forward_terminal_slice, terminal_candidate };
+// Scoped derivation evidence: terminal-program bounds concern the supplied
+// forward slice, not an independently verified original-problem optimum.
+struct CandidateHistory final : JointRelationPayload {
+    PreimageTarget target{PreimageTarget::forward_terminal_slice};
+    JointHistoryRelation history;
+    reachability::ForwardTube forward;
+    std::optional<TerminalMinimizers> terminal;
+    CandidateHistory(PreimageTarget,JointHistoryRelation,reachability::ForwardTube,
+        std::optional<TerminalMinimizers>);
+};
+using Providers = registry::CheckedProviders<registry::GeometryPort,
+    registry::GeometryPort,registry::ConversionPort,registry::LPPort,registry::ConvexPort>;
+
+// Provider order: equivalent H projection, equivalent V affine/sum, equivalent
+// H conversion, LP, convex. Borrows checked registrations until strategy prepare
+// snapshots them; thereafter registries can be destroyed. No local registry.
+// First profile: nominal_open_loop, candidate_relaxation, numerical, native H.
+// Exact/partial claims remain unsupported outside the compiled nominal
+// exact-H profile. That profile enforces caller row caps before relation-row
+// allocation; other profile materialization caps are refused. Singular A needs
+// no inverse.
+registry::StrategyRegistration make_registration(Providers);
+registry::StrategyRegistration
+    make_registration(Providers,
+                      std::optional<registry::PreparedProvider<registry::HistoryOptimizerPort>>);
+} // namespace csl::synthesis::strategy_a

@@ -1,0 +1,102 @@
+#pragma once
+
+#include <csl/problem/contracts.hpp>
+#include <csl/reachability/fixed_plan_disturbance.hpp>
+#include <csl/optimization/worst_case_vertex.hpp>
+#include <csl/artifacts/run_statistics.hpp>
+
+#include <optional>
+#include <vector>
+
+namespace csl::optimization {
+
+// Complete means every action plan selected by the request received a usable
+// candidate score. Callers with a restricted candidate catalogue must report
+// coverage against the full action product separately.
+enum class CandidateSearchCoverage { complete, incomplete };
+
+// Stage-invariant ordered action catalogue; indices distinguish duplicate rows.
+struct FiniteActionMinimaxRequest {
+    ProblemId problem;
+    RequestId request;
+    model::LinearSystem system;
+    sets::SetData initial;
+    FiniteDomain actions;
+    std::vector<sets::SetData> disturbances;
+    std::vector<sets::SetData> admissible_states;
+    Objective objective;
+    // nullopt preserves exhaustive enumeration. A present, nonempty value is a
+    // restricted set of full-horizon catalogue-index histories; solvers only
+    // evaluate those histories and nominal callers report product coverage
+    // separately. An explicitly empty value is invalid.
+    std::optional<std::vector<std::vector<std::size_t>>> candidate_action_indices{};
+};
+struct FiniteActionMinimaxLimits {
+    std::size_t max_plans;
+    std::size_t max_points_per_stage;
+    // Computed values within this absolute distance of the minimum are retained.
+    double near_optimal_tolerance;
+};
+// Optional caller-planned timing IDs for one execution. The caller must add
+// every ID to the collector plan as a nested descendant of its run span.
+// Plan phase vectors follow the finite catalogue enumeration order.
+struct FiniteMinimaxPlanTimingSpans {
+    artifacts::SpanId plan_setup;
+    artifacts::SpanId propagation;
+    std::vector<artifacts::SpanId> stage_materialization;
+    artifacts::SpanId objective;
+    artifacts::SpanId record_assembly;
+};
+struct FiniteMinimaxTimingSpans {
+    artifacts::SpanId validation;
+    std::vector<FiniteMinimaxPlanTimingSpans> plans;
+    artifacts::SpanId result_selection;
+};
+struct FinitePlanFeasible {
+    std::vector<std::size_t> action_indices;
+    double worst_value;
+    Vector maximizer;
+    std::size_t evaluated_vertices;
+    // Complete generated terminal V description for independent cost replay.
+    sets::SetData terminal;
+};
+struct FinitePlanRejected {
+    std::vector<std::size_t> action_indices;
+    std::size_t stage;
+    Vector violating_successor;
+};
+using FinitePlanRecord = std::variant<FinitePlanFeasible, FinitePlanRejected>;
+struct FiniteMinimaxOptimal {
+    ProblemId problem;
+    RequestId request;
+    double value;
+    std::vector<FinitePlanRecord> plans;
+    // Indices into plans, ordered by catalogue enumeration.
+    std::vector<std::size_t> minimizing_plan_indices;
+    Assurance assurance;
+};
+struct FiniteMinimaxInfeasible {
+    ProblemId problem;
+    RequestId request;
+    std::vector<FinitePlanRejected> rejected_plans;
+    Assurance assurance;
+};
+struct FiniteMinimaxEmptyCatalogue {};
+// An empty initial/disturbance set leaves no adversarial trajectory to score.
+struct FiniteMinimaxNoScenarios {};
+using FiniteActionMinimaxOutcome = std::variant<FiniteMinimaxOptimal,
+    FiniteMinimaxInfeasible, FiniteMinimaxEmptyCatalogue, FiniteMinimaxNoScenarios,
+    Unsupported, OperationStopped>;
+
+// Evaluates every selected fixed action history and every generated terminal
+// V row. With no candidate catalogue this is the complete action product; a
+// supplied subset is not a full-product optimality claim. Only numerical
+// assurance is available; records are replay witnesses, not validated rounding
+// certificates or an independently proved H/V conversion.
+FiniteActionMinimaxOutcome finite_action_minimax(
+    const FiniteActionMinimaxRequest& request,
+    FiniteActionMinimaxLimits limits,
+    const ExecutionContext& context = {},
+    const FiniteMinimaxTimingSpans* timing_spans = nullptr);
+
+} // namespace csl::optimization

@@ -1,0 +1,62 @@
+# Target and installation ownership for synthesis. Included from the project root.
+
+csl_add_library(csl_terminal_minimizers STATIC src/synthesis/terminal_minimizers.cpp)
+
+target_link_libraries(csl_terminal_minimizers PUBLIC CSL::sets CSL::registry CSL::convex CSL::problem PRIVATE CSL::artifacts)
+
+csl_add_library(csl_control_recovery STATIC src/synthesis/control_recovery.cpp)
+
+target_link_libraries(csl_control_recovery PUBLIC CSL::resolved_problem CSL::sets)
+
+csl_add_library(csl_history_cost STATIC src/optimization/history_cost.cpp)
+target_link_libraries(csl_history_cost PUBLIC CSL::control_recovery CSL::running_control_cost CSL::objectives)
+
+csl_add_library(csl_history_optimizer STATIC src/optimization/history_optimizer.cpp
+  src/optimization/history_domain.cpp)
+target_link_libraries(csl_history_optimizer PUBLIC CSL::history_cost CSL::registry)
+if(CSL_ENABLE_CASADI)
+  csl_add_library(csl_casadi_history_optimizer STATIC src/adapters/nlp/casadi_history_optimizer.cpp)
+  target_link_libraries(csl_casadi_history_optimizer PUBLIC CSL::history_optimizer PRIVATE casadi::casadi)
+  csl_add_library(csl_casadi_superscs_history_optimizer STATIC src/adapters/nlp/casadi_superscs_history_optimizer.cpp)
+  target_link_libraries(csl_casadi_superscs_history_optimizer PUBLIC CSL::history_optimizer PRIVATE casadi::casadi)
+endif()
+
+csl_add_library(csl_strategy_a STATIC
+  src/synthesis/strategy_a/strategy.cpp)
+
+target_link_libraries(csl_strategy_a PUBLIC CSL::nominal_forward CSL::terminal_minimizers
+  CSL::control_recovery CSL::history_optimizer CSL::artifacts)
+
+csl_add_library(csl_strategy_ts01 STATIC src/synthesis/strategy_ts01/analytic_profile.cpp)
+
+target_link_libraries(csl_strategy_ts01 PUBLIC CSL::resolved_problem CSL::sets CSL::registry)
+
+csl_add_library(csl_strategy_b STATIC src/synthesis/strategy_b/direct_joint.cpp)
+
+target_link_libraries(csl_strategy_b PUBLIC
+  CSL::resolved_problem CSL::sets CSL::registry CSL::convex CSL::verification
+  CSL::strategy_ts01 CSL::history_optimizer
+  PRIVATE CSL::artifacts)
+
+csl_add_library(csl_witness_selector STATIC src/synthesis/witness_selector.cpp)
+
+target_link_libraries(csl_witness_selector PUBLIC CSL::registry CSL::optimization CSL::strategy_ts01
+  PRIVATE CSL::artifacts)
+
+csl_add_library(csl_hybrid_path_program STATIC
+  src/synthesis/hybrid_path_program.cpp
+  src/synthesis/hybrid_projected_reachability.cpp
+  src/synthesis/hybrid_family_verifier.cpp
+  src/synthesis/hybrid_linear_h_family_verifier.cpp
+  src/synthesis/hybrid_interval_family_verifier.cpp
+  src/synthesis/hybrid_two_parameter_family_verifier.cpp)
+
+target_link_libraries(csl_hybrid_path_program PUBLIC CSL::model CSL::sets CSL::optimization CSL::convex CSL::registry CSL::polyhedral)
+
+csl_add_library(csl_finite_action_histories STATIC src/synthesis/finite_search/action_histories.cpp)
+target_link_libraries(csl_finite_action_histories PUBLIC CSL::problem)
+
+csl_add_library(csl_finite_mixed_branch STATIC src/synthesis/finite_search/mixed_branch.cpp)
+target_link_libraries(csl_finite_mixed_branch PUBLIC CSL::finite_action_histories CSL::resolved_core CSL::registry)
+
+csl_install_headers(synthesis)
