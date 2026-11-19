@@ -102,10 +102,10 @@ std::optional<ob::TimingScope> start_planned_program_scope(const ExecutionContex
     }
     return {};
 }
-class NominalExactHRelation final : public JointRelationPayload {
+class RecordedJointHRelation final : public JointRelationPayload {
     sets::SetData relation_;
 public:
-    explicit NominalExactHRelation(sets::SetData relation) : relation_(std::move(relation)) {}
+    explicit RecordedJointHRelation(sets::SetData relation) : relation_(std::move(relation)) {}
     const sets::SetData* h_relation_for_recording() const noexcept override { return &relation_; }
 };
 Diagnostic unsupported(std::string field, std::string text) {
@@ -342,6 +342,18 @@ struct RelationRows {
         return std::get<sets::SetData>(std::move(r));
     }
 };
+bool fits_feasible_row_limit(const std::vector<Interval> &bounds, std::size_t remaining) {
+    for (const auto &bound : bounds) {
+        const std::size_t rows = bound.lower && bound.upper && *bound.lower == *bound.upper
+            ? 1
+            : static_cast<std::size_t>(bound.lower.has_value()) +
+                  static_cast<std::size_t>(bound.upper.has_value());
+        if (rows > remaining)
+            return false;
+        remaining -= rows;
+    }
+    return true;
+}
 RelationRows feasible_rows(const SparseMatrix &constraints, const std::vector<Interval> &bounds) {
     RelationRows r(constraints.cols);
     for(std::size_t i=0;i<constraints.rows;++i) {
@@ -389,13 +401,6 @@ void optimal_level(RelationRows& rows,const JointProgram& p,const Vector& anchor
         }
     },p.lifted_objective);
 }
-class SourceHistoryPayload final : public JointRelationPayload {
-    sets::SetData relation_;
-
-public:
-    explicit SourceHistoryPayload(sets::SetData relation) : relation_(std::move(relation)) {}
-    const sets::SetData *h_relation_for_recording() const noexcept override { return &relation_; }
-};
 RequestProvenance scope(const ProgramIdentity& id,const registry::Provenance& provenance) {
     RequestProvenance r{{id.program.value},provenance.port,provenance.requested.id,provenance.requested.version,{},{}};
     if(provenance.actual){r.actual_module=provenance.actual->id;r.actual_version=provenance.actual->version;}return r;
@@ -452,9 +457,8 @@ SynthesisResult detail::DirectJointExecutionRunner::solve_source_history(
     const ExecutionContext &context, SynthesisResult result) {
     const auto &profile = *prepared_request_->history_optimization;
     const auto assembly = assemble_joint_constraints(p, &context);
-    const auto rows = feasible_rows(assembly.matrix, assembly.bounds);
     if (request.materialization_limit &&
-        rows.inequalities.rows + rows.equalities.rows > *request.materialization_limit) {
+        !fits_feasible_row_limit(assembly.bounds, *request.materialization_limit)) {
         result.termination = Termination::resource_limit;
         result.stop = ScopedOperationStopped{
             {StopReason::resource_limit, "Feasible relation exceeds the caller's row materialization limit."},
@@ -465,7 +469,7 @@ SynthesisResult detail::DirectJointExecutionRunner::solve_source_history(
     }
 
     const SetId feasible_id{"syn04-feasible:" + p.identity().value};
-    auto relation = rows.finish(feasible_id);
+    auto relation = feasible_rows(assembly.matrix, assembly.bounds).finish(feasible_id);
     if (const auto *errors = std::get_if<Diagnostics>(&relation)) {
         result.termination = Termination::contract_rejected;
         result.stop = ContractValidationFailure{*errors, retained(result), std::monostate{}};
@@ -476,7 +480,7 @@ SynthesisResult detail::DirectJointExecutionRunner::solve_source_history(
     const std::vector<TransformStepIdentity> lineage{
         {{"syn04-build:" + p.identity().value}, {p.identity().value}, feasible_id,
          {strategy_id}, strategy_version}};
-    const auto payload = std::make_shared<const SourceHistoryPayload>(full_history.relation);
+    const auto payload = std::make_shared<const RecordedJointHRelation>(full_history.relation);
     const auto publish = [&](CandidateFeasibility feasibility) {
         auto family = FamilyPublisher::publish(
             {p.identity(), request, full_history.coordinates, {strategy_id}, strategy_version, lineage},
@@ -577,17 +581,21 @@ SynthesisResult detail::DirectJointExecutionRunner::solve_source_history(
         query.witness = witness;
         const auto checked = verification::verify_trajectory(p, query, context);
         if (checked.termination != Termination::completed) {
-            const StopReason reason = checked.termination == Termination::deadline_expired
-                                          ? StopReason::deadline_expired
-                                      : checked.termination == Termination::resource_limit
-                                          ? StopReason::resource_limit
-                                          : StopReason::numerical_failure;
-            const OperationStopped stopped{
-                reason,
-                "Independent source trajectory check of whole-history optimizer output stopped."};
+            const StopReason reason =
+                checked.termination == Termination::cancelled
+                    ? StopReason::cancelled
+                : checked.termination == Termination::deadline_expired
+                    ? StopReason::deadline_expired
+                : checked.termination == Termination::resource_limit
+                    ? StopReason::resource_limit
+                    : StopReason::numerical_failure;
             result.termination = stopped_termination(reason);
+            const auto &verifier = checked.verifier;
             result.stop = ScopedOperationStopped{
-                stopped, scope(optimized_result->identity, call.provider), retained(result)};
+                {reason, "Independent source trajectory verification stopped."},
+                {{"syn04-history-trajectory-verification:" + p.identity().value}, "verification",
+                 verifier.id, verifier.version, verifier.id, verifier.version},
+                retained(result)};
             return result;
         }
         if (checked.bindings != verification::CheckStatus::numerical_pass ||
@@ -889,7 +897,7 @@ SynthesisResult detail::DirectJointExecutionRunner::solve_impl(const problem::Re
                     const ClaimEvidence claim{p.identity(),SymbolicArgument{"bounded nominal Strategy B exact-H face",
                         "The compiled verifier independently reconstructs the source feasible histories and verifies both exact optimal-face inclusions over binary64 dyadic inputs."}};
                     const OptimumEvidence optimum{claim,{ObjectiveBound{bounds->first,claim},ObjectiveBound{bounds->second,claim}}};
-                    auto payload=std::make_shared<const NominalExactHRelation>(std::get<sets::SetData>(std::move(relation)));
+                    auto payload=std::make_shared<const RecordedJointHRelation>(std::get<sets::SetData>(std::move(relation)));
                     const auto exact_lineage=registry::detail::strategy_b_nominal_linear_exact_lineage(p.identity());
                     const FamilyIdentity identity{p.identity(),request,build_artifact->coordinates,{strategy_id},strategy_version,exact_lineage};
                     CompleteOptimalFamily complete{{build_artifact->coordinates,request.representation,payload},optimum,
