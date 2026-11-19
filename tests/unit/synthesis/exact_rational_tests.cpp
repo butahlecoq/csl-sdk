@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
+#include <cmath>
 #include <limits>
 
 #include "synthesis/exact_rational.hpp"
@@ -78,4 +79,38 @@ TEST_CASE("rational parser handles large exact witnesses and rejects malformed i
     CHECK_FALSE(parse("1//2", expected, budget));
     CHECK_FALSE(parse("1/0", expected, budget));
     CHECK_FALSE(parse("1/-3", expected, budget));
+}
+
+TEST_CASE("binary64 enclosure is directed for exact and fractional bounds") {
+    using exact_h::Binary64BracketStatus;
+    using exact_h::ExactRational;
+    const auto one = exact_h::exact_detail::from_u64(1);
+    const auto three = exact_h::exact_detail::from_u64(3);
+    const double infinity = std::numeric_limits<double>::infinity();
+
+    ExactRational value{one, three, 0};
+    const auto positive = exact_h::bracket_binary64(value, 8192);
+    REQUIRE(positive.status == Binary64BracketStatus::finite);
+    CHECK(positive.lower == 1.0 / 3.0);
+    CHECK(positive.upper == std::nextafter(positive.lower, infinity));
+    double out{};
+    CHECK_FALSE(exact_h::exact_rational_to_double(value, 8192, out));
+
+    value.numerator.negative = true;
+    const auto negative = exact_h::bracket_binary64(value, 8192);
+    REQUIRE(negative.status == Binary64BracketStatus::finite);
+    CHECK(negative.lower == -positive.upper);
+    CHECK(negative.upper == -positive.lower);
+
+    REQUIRE(exact_h::exact_rational_to_double(ExactRational{one, one, -3}, 8192, out));
+    CHECK(out == 0.125);
+    const auto underflow = exact_h::bracket_binary64(ExactRational{one, one, -1075}, 8192);
+    REQUIRE(underflow.status == Binary64BracketStatus::finite);
+    CHECK(underflow.lower == 0.0);
+    CHECK(underflow.upper == std::numeric_limits<double>::denorm_min());
+
+    CHECK(exact_h::bracket_binary64(ExactRational{one, one, 1024}, 8192).status ==
+          Binary64BracketStatus::outside_finite_range);
+    CHECK(exact_h::bracket_binary64(ExactRational{one, three, 0}, 1).status ==
+          Binary64BracketStatus::arithmetic_budget);
 }

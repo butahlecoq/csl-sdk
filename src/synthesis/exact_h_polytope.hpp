@@ -690,16 +690,21 @@ inline bool compare_scaled_rationals(const ExactRational& lhs,
     return true;
 }
 
-inline bool exact_rational_to_double(const ExactRational& value,
-                                     std::size_t max_bits, double& result) {
-    if (exact_detail::is_zero(value.numerator)) {
-        result = 0.0;
-        return true;
-    }
-    if (value.denominator.negative || exact_detail::is_zero(value.denominator))
-        return false;
+enum class Binary64BracketStatus { finite, invalid, outside_finite_range, arithmetic_budget };
 
-    ExactRational magnitude = value;
+struct Binary64Bracket {
+    Binary64BracketStatus status;
+    double lower{};
+    double upper{};
+};
+
+inline Binary64Bracket bracket_binary64(ExactRational magnitude, std::size_t max_bits) {
+    using Status = Binary64BracketStatus;
+    if (exact_detail::is_zero(magnitude.numerator))
+        return {Status::finite};
+    if (magnitude.denominator.negative || exact_detail::is_zero(magnitude.denominator))
+        return {Status::invalid};
+
     const bool negative = magnitude.numerator.negative;
     magnitude.numerator.negative = false;
     constexpr std::uint64_t max_finite_bits = 0x7fefffffffffffffULL;
@@ -709,27 +714,39 @@ inline bool exact_rational_to_double(const ExactRational& value,
         const auto bits = low + (high - low) / 2;
         const auto candidate = std::bit_cast<double>(bits);
         const auto dyadic = exact_detail::decode(candidate);
-        ExactRational candidate_rational;
-        candidate_rational.numerator = exact_detail::from_u64(dyadic.significand);
-        candidate_rational.binary_exponent = dyadic.exponent;
+        const ExactRational candidate_rational{
+            exact_detail::from_u64(dyadic.significand),
+            exact_detail::from_u64(1), dyadic.exponent};
         int order = 0;
-        if (!compare_scaled_rationals(magnitude, candidate_rational,
-                                      max_bits, order))
-            return false;
+        if (!compare_scaled_rationals(magnitude, candidate_rational, max_bits, order))
+            return {Status::arithmetic_budget};
         if (order == 0) {
-            const auto signed_bits = bits | (negative ? (std::uint64_t{1} << 63) : 0);
-            result = std::bit_cast<double>(signed_bits);
-            return true;
+            const double value = negative ? -candidate : candidate;
+            return {Status::finite, value, value};
         }
         if (order > 0) {
-            if (bits == max_finite_bits) break;
             low = bits + 1;
         } else {
-            if (bits == 0) break;
+            // Zero is the first candidate, and magnitude is positive.
             high = bits - 1;
         }
     }
-    return false;
+
+    if (low > max_finite_bits)
+        return {Status::outside_finite_range};
+    const auto lower = std::bit_cast<double>(high);
+    const auto upper = std::bit_cast<double>(low);
+    return negative ? Binary64Bracket{Status::finite, -upper, -lower}
+                    : Binary64Bracket{Status::finite, lower, upper};
+}
+
+inline bool exact_rational_to_double(const ExactRational& value,
+                                     std::size_t max_bits, double& result) {
+    const auto bracket = bracket_binary64(value, max_bits);
+    if (bracket.status != Binary64BracketStatus::finite || bracket.lower != bracket.upper)
+        return false;
+    result = bracket.lower;
+    return true;
 }
 
 // Project an exact H-relation onto the integer-scaled value of a binary64
