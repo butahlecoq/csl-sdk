@@ -428,49 +428,49 @@ struct PipelineAccess {
         checked.emplace(entry, s.request, s.requirements, std::move(provenance), offer);
         return std::nullopt;
     }
+    template <std::size_t... Index, class... Ports>
+    static std::variant<CheckedPipeline<Ports...>, Rejection>
+    check_indexed(std::index_sequence<Index...>, const Selection<Ports> &...s) {
+        std::tuple<std::optional<CheckedEntry<Ports>>...> entries;
+        std::array failures{check_entry(s, std::get<Index>(entries))...};
+        for (auto &failure : failures)
+            if (failure)
+                return std::move(*failure);
+        const std::array offers{std::get<Index>(entries).value().offer...};
+        const std::array provenances{std::get<Index>(entries).value().provenance...};
+        std::optional<Rejection> rejection;
+        std::size_t index = 0;
+        (
+            [&] {
+                for (const auto &transition : s.inputs) {
+                    if (rejection)
+                        break;
+                    if (transition.producer >= index) {
+                        rejection = reject(provenances[index], "transition.producer",
+                                           "producer must precede its consumer");
+                        break;
+                    }
+                    auto diagnostics =
+                        check_transition(offers[transition.producer].output, transition.required);
+                    if (!diagnostics.empty())
+                        rejection = Rejection{provenances[index], std::move(diagnostics)};
+                }
+                ++index;
+            }(),
+            ...);
+        if (rejection)
+            return *rejection;
+        return CheckedPipeline<Ports...>{
+            std::tuple<CheckedEntry<Ports>...>{std::move(std::get<Index>(entries).value())...}};
+    }
+
     template <class... Ports>
     static std::variant<CheckedPipeline<Ports...>, Rejection> check(const Selection<Ports> &...s) {
         if constexpr (sizeof...(Ports) == 0) {
             // A provider-only strategy has no fixed requests or transitions.
-            // Do not instantiate unused transition bookkeeping for this case.
             return CheckedPipeline<>{std::tuple<>{}};
         } else {
-            std::tuple<std::optional<CheckedEntry<Ports>>...> entries;
-            return std::apply(
-                [&](auto &...entry) -> std::variant<CheckedPipeline<Ports...>, Rejection> {
-                    std::array failures{check_entry(s, entry)...};
-                    for (auto &failure : failures)
-                        if (failure)
-                            return std::move(*failure);
-                    const std::array offers{entry.value().offer...};
-                    const std::array provenances{entry.value().provenance...};
-                    std::optional<Rejection> rejection;
-                    std::size_t index = 0;
-                    (
-                        [&] {
-                            for (const auto &transition : s.inputs) {
-                                if (rejection)
-                                    break;
-                                if (transition.producer >= index) {
-                                    rejection = reject(provenances[index], "transition.producer",
-                                                       "producer must precede its consumer");
-                                    break;
-                                }
-                                auto diagnostics = check_transition(
-                                    offers[transition.producer].output, transition.required);
-                                if (!diagnostics.empty())
-                                    rejection =
-                                        Rejection{provenances[index], std::move(diagnostics)};
-                            }
-                            ++index;
-                        }(),
-                        ...);
-                    if (rejection)
-                        return *rejection;
-                    return CheckedPipeline<Ports...>{
-                        std::tuple<CheckedEntry<Ports>...>{std::move(entry.value())...}};
-                },
-                entries);
+            return check_indexed(std::index_sequence_for<Ports...>{}, s...);
         }
     }
 };
