@@ -19,6 +19,9 @@ inline constexpr artifacts::SpanId terminal_optimization{3};
 inline constexpr artifacts::SpanId terminal_preimage{4};
 inline constexpr artifacts::SpanId family_construction{5};
 }
+// Selects direct H projection of joint transition factors for numerical candidates.
+inline constexpr auto projected_nominal_profile = "nominal_open_loop_projected";
+
 enum class PreimageTarget { forward_terminal_slice, terminal_candidate };
 // Scoped derivation evidence: terminal-program bounds concern the supplied
 // forward slice, not an independently verified original-problem optimum.

@@ -31,7 +31,11 @@ Diagnostics capabilities(const problem::ResolvedProblem& problem,const FamilyReq
         problem,family,family.representation);
     const bool exact_b04=registry::detail::strategy_a_b04_c_exact_profile_valid(
         problem,family,family.representation);
-    if(!exact_ts01&&!exact_ts02&&!exact_ts03&&!exact_nominal&&!exact_b04&&family.profile!="nominal_open_loop")return unsupported("strategy_a.profile","Only nominal_open_loop candidates and reviewed exact profiles are supported.");
+    const bool nominal_candidate = family.profile == "nominal_open_loop" ||
+                                   family.profile == projected_nominal_profile;
+    if (!nominal_candidate && !exact_ts01 && !exact_ts02 && !exact_ts03 && !exact_nominal && !exact_b04)
+        return unsupported("strategy_a.profile",
+                           "Select a nominal candidate profile or a reviewed exact profile.");
     if(!exact_ts01&&!exact_ts02&&!exact_ts03&&!exact_nominal&&!exact_b04&&family.target!=FamilyTarget::candidate_relaxation)
         return unsupported("strategy_a.coverage","No reviewed coverage procedure or optimal-subset verifier; request a candidate relation.");
     if(family.assurance!=Assurance::numerical)
@@ -249,7 +253,10 @@ public:
                 return result;
             }
             auto forward_timing=timing_scope(context,timing::forward);
-            auto forwarded=reachability::nominal_forward(problem,{"strategy-a/forward"},forward_,context);
+            auto forwarded = request.profile == projected_nominal_profile
+                ? reachability::nominal_forward_projected(problem, {"strategy-a/forward"},
+                                                         forward_.projection, context)
+                : reachability::nominal_forward(problem, {"strategy-a/forward"}, forward_, context);
             if(const auto* failure=std::get_if<reachability::ForwardFailure>(&forwarded)) {
                 close_timing(forward_timing,forward_termination(*failure));
                 lineage=forward_lineage(failure->prefix);
