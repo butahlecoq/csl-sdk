@@ -43,3 +43,27 @@ jobs:
           cmake -S research/benchmarks -B build/research -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$RUNNER_TEMP/csl-sdk"
           cmake --build build/research --parallel 2
           ctest --test-dir build/research --output-on-failure --no-tests=error
+  casadi-strategies:
+    name: Real IPOPT through both control strategies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Configure the solver-enabled SDK
+        run: |
+          python -m pip install cmake==3.31.6 casadi==3.8.0
+          casadi_dir=$(python -c 'from pathlib import Path; import casadi; print(Path(casadi.__file__).resolve().parent / "cmake")')
+          cmake -S . -B build/strategies -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+            -DCSL_ENABLE_CASADI=ON -DCSL_ENABLE_HIGHS=ON -DCSL_ENABLE_QHULL=ON "-Dcasadi_DIR=$casadi_dir"
+      - name: Build and run both strategy suites with typed memberships
+        run: |
+          cmake --build build/strategies --target strategy_a_tests direct_joint_strategy_tests --parallel 4
+          ctest --test-dir build/strategies -R '^(strategy_a_tests|direct_joint_strategy_tests)$' --output-on-failure --no-tests=error
