@@ -315,6 +315,13 @@ template <class Port> struct CheckedEntry {
     Requirements requirements;
     Provenance provenance;
     Offer offer;
+
+    CheckedEntry(const Registration<Port> &registration,
+                 const typename Port::Request &request_value, Requirements requirements_value,
+                 Provenance provenance_value, Offer offer_value)
+        : entry(&registration), request(&request_value),
+          requirements(std::move(requirements_value)), provenance(std::move(provenance_value)),
+          offer(std::move(offer_value)) {}
 };
 template <class Port> struct PreparedEntry {
     Registration<Port> entry;
@@ -394,7 +401,8 @@ struct PipelineAccess {
             checked.entries_);
     }
     template <class Port>
-    static std::variant<CheckedEntry<Port>, Rejection> check_entry(const Selection<Port> &s) {
+    static std::optional<Rejection> check_entry(const Selection<Port> &s,
+                                                std::optional<CheckedEntry<Port>> &checked) {
         Provenance provenance{Port::name, s.method, {}};
         const auto found = s.registry.entries_.find(s.method.id.value);
         if (found == s.registry.entries_.end())
@@ -417,7 +425,8 @@ struct PipelineAccess {
                                        static_cast<bool>(entry.basis_factory), accepts_validated);
         if (!diagnostics.empty())
             return Rejection{provenance, std::move(diagnostics)};
-        return CheckedEntry<Port>{&entry, &s.request, s.requirements, provenance, offer};
+        checked.emplace(entry, s.request, s.requirements, std::move(provenance), offer);
+        return std::nullopt;
     }
     template <class... Ports>
     static std::variant<CheckedPipeline<Ports...>, Rejection> check(const Selection<Ports> &...s) {
@@ -426,58 +435,40 @@ struct PipelineAccess {
             // Do not instantiate unused transition bookkeeping for this case.
             return CheckedPipeline<>{std::tuple<>{}};
         } else {
-            auto entries = std::tuple{check_entry(s)...};
-            std::optional<Rejection> rejection;
-            std::apply(
-                [&](const auto &...e) {
+            std::tuple<std::optional<CheckedEntry<Ports>>...> entries;
+            return std::apply(
+                [&](auto &...entry) -> std::variant<CheckedPipeline<Ports...>, Rejection> {
+                    std::array failures{check_entry(s, entry)...};
+                    for (auto &failure : failures)
+                        if (failure)
+                            return std::move(*failure);
+                    const std::array offers{entry.value().offer...};
+                    const std::array provenances{entry.value().provenance...};
+                    std::optional<Rejection> rejection;
+                    std::size_t index = 0;
                     (
                         [&] {
-                            if (!rejection)
-                                if (const auto *r = std::get_if<Rejection>(&e))
-                                    rejection = *r;
+                            for (const auto &transition : s.inputs) {
+                                if (rejection)
+                                    break;
+                                if (transition.producer >= index) {
+                                    rejection = reject(provenances[index], "transition.producer",
+                                                       "producer must precede its consumer");
+                                    break;
+                                }
+                                auto diagnostics = check_transition(
+                                    offers[transition.producer].output, transition.required);
+                                if (!diagnostics.empty())
+                                    rejection =
+                                        Rejection{provenances[index], std::move(diagnostics)};
+                            }
+                            ++index;
                         }(),
                         ...);
-                },
-                entries);
-            if (rejection)
-                return *rejection;
-            const auto offers = std::apply(
-                [](const auto &...e) {
-                    return std::array<Offer, sizeof...(Ports)>{
-                        std::get<CheckedEntry<Ports>>(e).offer...};
-                },
-                entries);
-            const auto provenances = std::apply(
-                [](const auto &...e) {
-                    return std::array<Provenance, sizeof...(Ports)>{
-                        std::get<CheckedEntry<Ports>>(e).provenance...};
-                },
-                entries);
-            std::size_t index = 0;
-            (
-                [&] {
-                    for (const auto &transition : s.inputs) {
-                        if (rejection)
-                            break;
-                        if (transition.producer >= index) {
-                            rejection = reject(provenances[index], "transition.producer",
-                                               "producer must precede its consumer");
-                            break;
-                        }
-                        auto diagnostics = check_transition(offers[transition.producer].output,
-                                                            transition.required);
-                        if (!diagnostics.empty())
-                            rejection = Rejection{provenances[index], std::move(diagnostics)};
-                    }
-                    ++index;
-                }(),
-                ...);
-            if (rejection)
-                return *rejection;
-            return std::apply(
-                [](auto &...e) {
-                    return CheckedPipeline<Ports...>{std::tuple<CheckedEntry<Ports>...>{
-                        std::get<CheckedEntry<Ports>>(std::move(e))...}};
+                    if (rejection)
+                        return *rejection;
+                    return CheckedPipeline<Ports...>{
+                        std::tuple<CheckedEntry<Ports>...>{std::move(entry.value())...}};
                 },
                 entries);
         }
