@@ -184,6 +184,8 @@ foreach(example_file CMakeLists.txt registered_lp.cpp registered_convex.cpp
     scenario_backend_artifact_check.cpp)
   file(COPY "${CSL_SOURCE_DIR}/examples/${example_file}" DESTINATION "${example_source}")
 endforeach()
+file(COPY "${CSL_SOURCE_DIR}/examples/geometry/kpabep_near_collinear.cpp"
+  DESTINATION "${example_source}/geometry")
 file(COPY "${CSL_SOURCE_DIR}/examples/scenario_cli_export_check.cmake"
   "${CSL_SOURCE_DIR}/examples/scenario_cli_methods_export_check.cmake"
   "${CSL_SOURCE_DIR}/examples/scenario_cli_identity_check.cmake"

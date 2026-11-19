@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.31)
 project(CSLInstalledConsumer LANGUAGES CXX)
+if(CMAKE_EXPORT_COMPILE_COMMANDS)
+  cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2 CACHE 2 CMAKEFILES 1 TOOLCHAINS 1)
+endif()
 find_package(CSL 0.1 CONFIG REQUIRED)
 
 add_executable(installed_discrete_model_client native_discrete_models.cpp)
@@ -583,6 +586,19 @@ if(NOT farkas_factory_forge_output MATCHES "(C2248|private|inaccessible)")
   message(FATAL_ERROR "Installed optimization API rejected the Farkas probe for a reason other than inaccessible evidence construction:\n${farkas_factory_forge_output}")
 endif()
 message(STATUS "Installed downstream ExactFarkasEvidence construction was rejected by the compiler")
+if(CMAKE_EXPORT_COMPILE_COMMANDS)
+  set(refusals "{}")
+  foreach(probe IN ITEMS ts01_issuer_forge ts01_callback_forge
+      ts01_relation_factory_forge farkas_factory_forge)
+    set(source "${probe}_client.cpp")
+    file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/${source}" digest)
+    string(JSON refusals SET "${refusals}" "${source}"
+      "{\"refused\": true, \"sha256\": \"${digest}\"}")
+  endforeach()
+  file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cpp-quality-negative-compiles.json"
+    CONTENT "${refusals}\n")
+endif()
+
 
 if(TARGET CSL::highs_lp)
 add_executable(installed_witness_selector_client witness_selector_client.cpp)

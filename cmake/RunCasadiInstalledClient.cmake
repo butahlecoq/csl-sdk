@@ -8,6 +8,8 @@ file(MAKE_DIRECTORY "${CSL_WORK_DIR}/source" "${CSL_WORK_DIR}/empty-path" "${CSL
 file(COPY
   "${CSL_SOURCE_DIR}/tests/installed/HeaderContexts.cmake"
   "${CSL_SOURCE_DIR}/tests/installed/fixed_tail_policy_client.cpp"
+  "${CSL_SOURCE_DIR}/tests/installed/casadi_history_optimizer_client.cpp"
+  "${CSL_SOURCE_DIR}/tests/installed/casadi_superscs_history_optimizer_client.cpp"
   "${CSL_SOURCE_DIR}/tests/unit/reachability/fixed_tail_validation_tests.cpp"
   "${CSL_SOURCE_DIR}/tests/unit/reachability/inner_template_tests.cpp"
   DESTINATION "${CSL_WORK_DIR}/source")
@@ -27,13 +29,17 @@ add_executable(boundaries fixed_tail_validation_tests.cpp)
 target_link_libraries(boundaries PRIVATE CSL::fixed_tail_policy)
 add_executable(templates inner_template_tests.cpp)
 target_link_libraries(templates PRIVATE CSL::inner_template)
+add_executable(history_optimizer casadi_history_optimizer_client.cpp)
+target_link_libraries(history_optimizer PRIVATE CSL::casadi_history_optimizer)
+add_executable(superscs_history_optimizer casadi_superscs_history_optimizer_client.cpp)
+target_link_libraries(superscs_history_optimizer PRIVATE CSL::casadi_superscs_history_optimizer)
 ]=])
 execute_process(COMMAND "${CMAKE_COMMAND}" -S "${CSL_WORK_DIR}/source" -B "${CSL_WORK_DIR}/build" -G Ninja
   -DCMAKE_BUILD_TYPE=Release "-DCMAKE_EXPORT_COMPILE_COMMANDS=${CSL_EXPORT_COMPILE_COMMANDS}" "-DCMAKE_SUPPRESS_REGENERATION=${CSL_EXPORT_COMPILE_COMMANDS}" "-DCMAKE_PREFIX_PATH=${CSL_INSTALL_PREFIX}" "-Dcasadi_DIR=${CSL_CASADI_DIR}"
   COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${CMAKE_COMMAND}" --build "${CSL_WORK_DIR}/build" --parallel 1
   COMMAND_ERROR_IS_FATAL ANY)
-foreach(client policy boundaries templates)
+foreach(client policy boundaries templates history_optimizer superscs_history_optimizer)
   execute_process(COMMAND /usr/bin/env -i "PATH=${CSL_WORK_DIR}/empty-path" "TMPDIR=${CSL_WORK_DIR}/tmp"
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 "${CSL_WORK_DIR}/build/${client}"
     COMMAND_ERROR_IS_FATAL ANY)
