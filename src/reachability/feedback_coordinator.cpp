@@ -8,7 +8,6 @@
 #include "../synthesis/exact_h_polytope.hpp"
 
 #include <algorithm>
-#include <bit>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -127,29 +126,14 @@ struct Runner {
 };
 namespace exact_h=csl::synthesis::detail::exact_h;
 
-// Bracket an exact stored-dyadic rational by binary64 values. The lower end
-// is used for a minimum; no numerical LP optimum is used to bootstrap bounds.
-double outward_lower(const exact_h::ExactRational& value,std::size_t max_bits) {
-    if(exact_h::exact_detail::is_zero(value.numerator)) return 0;
-    auto magnitude=value; const bool negative=magnitude.numerator.negative;
-    magnitude.numerator.negative=false;
-    constexpr std::uint64_t max_finite=0x7fefffffffffffffULL;
-    std::uint64_t low=0,high=max_finite;
-    while(low<=high) {
-        const auto bits=low+(high-low)/2;
-        auto decoded=exact_h::exact_detail::decode(std::bit_cast<double>(bits));
-        exact_h::ExactRational candidate;
-        candidate.numerator=exact_h::exact_detail::from_u64(decoded.significand);
-        candidate.binary_exponent=decoded.exponent;
-        int order=0;
-        if(!exact_h::compare_scaled_rationals(magnitude,candidate,max_bits,order))
-            throw Failure{OperationStopped{StopReason::resource_limit,"Exact control bound comparison exceeded its arithmetic budget."}};
-        if(order==0) return negative ? -std::bit_cast<double>(bits) : std::bit_cast<double>(bits);
-        if(order>0) { if(bits==max_finite) { low=max_finite+1; break; } low=bits+1; }
-        else { if(bits==0) { high=0; break; } high=bits-1; }
-    }
-    if(low>max_finite) bad("feedback.control.bounds","A finite binary64 control carrier could not be represented.");
-    return negative ? -std::bit_cast<double>(low) : std::bit_cast<double>(high);
+double outward_lower(const exact_h::ExactRational& value, std::size_t max_bits) {
+    const auto bracket = exact_h::bracket_binary64(value, max_bits);
+    if (bracket.status == exact_h::Binary64BracketStatus::arithmetic_budget)
+        throw Failure{OperationStopped{StopReason::resource_limit,
+            "Exact control bound comparison exceeded its arithmetic budget."}};
+    if (bracket.status != exact_h::Binary64BracketStatus::finite)
+        bad("feedback.control.bounds", "A finite binary64 control carrier could not be represented.");
+    return bracket.lower;
 }
 
 struct ExactCancellation {
