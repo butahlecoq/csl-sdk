@@ -1,0 +1,11 @@
+# Registered report bundles and fixtures carry hashes over exact source bytes,
+# including CRLF. Preserve them verbatim; their captured log whitespace is evidence.
+tests/reporting/fixtures/registered/** -text whitespace=-blank-at-eol,-blank-at-eof
+reports/algorithm-results/** -text whitespace=-blank-at-eol,-blank-at-eof
+# MPC07 online evidence has exact-byte manifests; do not rewrite captured records.
+benchmarks/reporting/mpc07/evidence/online-evaluation-0524f7e4/** -text whitespace=-blank-at-eol,-blank-at-eof
+benchmarks/reporting/mpc07/evidence/online-evaluation-0524f7e4-recheck-aed7a98b/** -text whitespace=-blank-at-eol,-blank-at-eof
+# The feedback example retains the captured provider/build evidence byte-for-byte.
+examples/feedback-geometry-tiny-fd28/** -text whitespace=-blank-at-eol,-blank-at-eof
+# Historical publication sources retain the exact bytes in their owner manifest.
+docs/research/evidence/b04-c-publication-spine-source-v1/** -text

@@ -1,0 +1,45 @@
+# Target and installation ownership for reachability. Included from the project root.
+
+csl_add_library(csl_feedback_geometry STATIC src/reachability/bounded_h_support.cpp src/reachability/feedback_geometry.cpp src/reachability/feedback_coordinator.cpp)
+target_link_libraries(csl_feedback_geometry PUBLIC CSL::registry CSL::optimization CSL::sets CSL::nominal_tube CSL::finite_plan_box CSL::finite_plan_zonotope CSL::finite_plan_ellipsoid)
+
+csl_add_library(csl_nominal_forward STATIC src/reachability/nominal_forward.cpp)
+
+target_link_libraries(csl_nominal_forward PUBLIC CSL::polyhedral CSL::resolved_problem
+  PRIVATE CSL::artifacts)
+
+csl_add_library(csl_nominal_tube STATIC src/reachability/nominal_tube.cpp)
+target_link_libraries(csl_nominal_tube PUBLIC CSL::nominal_forward CSL::polyhedral CSL::resolved_problem)
+
+csl_add_library(csl_fixed_plan_disturbance STATIC src/reachability/fixed_plan_disturbance.cpp)
+
+target_link_libraries(csl_fixed_plan_disturbance PUBLIC CSL::model CSL::sets CSL::artifacts)
+
+csl_add_library(csl_finite_plan_box STATIC src/reachability/finite_plan_box.cpp)
+target_link_libraries(csl_finite_plan_box PUBLIC CSL::fixed_plan_disturbance)
+
+csl_add_library(csl_finite_plan_zonotope STATIC src/reachability/finite_plan_zonotope.cpp)
+target_link_libraries(csl_finite_plan_zonotope PUBLIC CSL::fixed_plan_disturbance CSL::sets)
+
+csl_add_library(csl_finite_plan_parallelotope STATIC src/reachability/finite_plan_parallelotope.cpp)
+target_link_libraries(csl_finite_plan_parallelotope PUBLIC CSL::fixed_plan_disturbance CSL::sets)
+csl_add_library(csl_finite_plan_ellipsoid STATIC src/reachability/finite_plan_ellipsoid.cpp)
+target_link_libraries(csl_finite_plan_ellipsoid PUBLIC CSL::fixed_plan_disturbance CSL::sets)
+
+csl_add_library(csl_finite_feedback STATIC src/reachability/finite_feedback.cpp)
+
+csl_add_library(csl_finite_feedback_port STATIC src/reachability/finite_feedback_port.cpp)
+target_link_libraries(csl_finite_feedback_port PUBLIC CSL::finite_feedback CSL::registry)
+
+csl_add_library(csl_inner_template STATIC src/reachability/inner_template.cpp)
+target_link_libraries(csl_inner_template PUBLIC CSL::contracts)
+
+csl_add_library(csl_fixed_tail_policy STATIC src/reachability/fixed_tail_policy.cpp)
+target_link_libraries(csl_fixed_tail_policy PUBLIC CSL::inner_template CSL::history_cost CSL::registry)
+if(CSL_ENABLE_CASADI)
+  csl_add_library(csl_casadi_fixed_tail STATIC src/adapters/nlp/casadi_fixed_tail.cpp)
+  target_link_libraries(csl_casadi_fixed_tail PUBLIC CSL::fixed_tail_policy PRIVATE casadi::casadi)
+  csl_install_headers(adapters)
+endif()
+
+csl_install_headers(reachability)
