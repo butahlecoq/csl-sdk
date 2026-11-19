@@ -781,7 +781,7 @@ TEST_CASE("Strategy A executes the real CasADi-IPOPT history optimizer with type
     CHECK(result.history_optimization->provider.actual_module->value == identity.id.value);
 }
 #endif
-TEST_CASE("Strategy A invokes the prepared whole-history optimizer before terminal optimization") {
+TEST_CASE("Strategy A retains the feasible preimage for a source-cost request") {
     auto query = request(integrator());
     query.configuration.history_optimizer = {"test.zero-history-optimizer"};
     query.history_optimization =
@@ -806,6 +806,11 @@ TEST_CASE("Strategy A invokes the prepared whole-history optimizer before termin
         for (const auto &diagnostic : failure->diagnostics)
             diagnostic_text += diagnostic.field + ": " + diagnostic.explanation + "; ";
     INFO("diagnostics=" << diagnostic_text);
+    REQUIRE(result.termination == Termination::completed);
+    REQUIRE(result.family);
+    const auto &candidate = payload(result);
+    CHECK(candidate.target == synthesis::strategy_a::PreimageTarget::forward_terminal_slice);
+    CHECK_FALSE(candidate.terminal);
     REQUIRE(result.history_optimization);
     CHECK(result.history_optimization->program.value == "strategy-a-history-run");
     REQUIRE(result.history_optimization->provider.actual_module);

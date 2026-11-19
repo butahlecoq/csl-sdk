@@ -1312,7 +1312,7 @@ TEST_CASE("Strategy B executes the real CasADi-IPOPT history optimizer with type
     CHECK(result.history_optimization->provider.actual_module->value == identity.id.value);
 }
 #endif
-TEST_CASE("Strategy B invokes the prepared whole-history optimizer before its terminal solver") {
+TEST_CASE("Strategy B source-cost requests do not invoke a terminal-only solver") {
     const auto problem = resolve(integrator());
     const auto family = request(problem);
     auto profile = std::make_shared<const optimization::StrategyHistoryOptimizationProfile>(
@@ -1322,9 +1322,11 @@ TEST_CASE("Strategy B invokes the prepared whole-history optimizer before its te
                                                          "state",
                                                          typed_history_memberships(),
                                                          optimization::ColdStart{}});
-    const auto prepared =
-        registered_prepared(problem, family, false, Termination::completed, nullptr, {},
-                            MathematicalOutcome::optimal, zero_history_optimizer(), profile);
+    bool terminal_called = false;
+    const auto prepared = registered_prepared(
+        problem, family, false, Termination::completed, nullptr,
+        [&] { terminal_called = true; }, MathematicalOutcome::optimal, zero_history_optimizer(),
+        profile);
     ExecutionContext context;
     context.resources = std::make_shared<const ResourcePolicy>(ResourcePolicy{1, 1, 1, {}});
     const auto result = accepted(prepared.create()->run(context));
@@ -1336,6 +1338,12 @@ TEST_CASE("Strategy B invokes the prepared whole-history optimizer before its te
         for (const auto &diagnostic : failure->diagnostics)
             diagnostic_text += diagnostic.field + ": " + diagnostic.explanation + "; ";
     INFO("diagnostics=" << diagnostic_text);
+    CHECK_FALSE(terminal_called);
+    REQUIRE(result.termination == Termination::completed);
+    REQUIRE(result.family);
+    const auto &candidate = std::get<CandidateFamily>(result.family->outcome());
+    REQUIRE(candidate.relation.payload->h_relation_for_recording());
+    CHECK(std::holds_alternative<WitnessFeasibilityEvidence>(candidate.feasibility));
     REQUIRE(result.history_optimization);
     CHECK(result.history_optimization->program.value == "strategy-b-history-run");
     REQUIRE(result.history_optimization->provider.actual_module);

@@ -395,6 +395,7 @@ public:
                          std::get<OperationStopped>(objective));
                     return result;
                 }
+                return result;
             }
             if(auto interrupted=interruption(context)) {
                 stop(result,local({"strategy-a/terminal"}),*interrupted);return result;
