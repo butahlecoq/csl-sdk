@@ -132,3 +132,58 @@ TEST_CASE("binary64 enclosure validates the denominator for zero") {
     CHECK(exact_h::bracket_binary64(ExactRational{{}, negative_denominator, 0}, 8192).status ==
           Binary64BracketStatus::invalid);
 }
+
+TEST_CASE("exact projection can substitute a signed equality before generating inequality pairs") {
+    using exact_h::FeasibilityState;
+    using exact_h::InclusionState;
+    exact_h::Limits limits;
+    limits.max_rows = 3;
+    const double upper[] = {0, 1};
+    const double lower[] = {0, -1};
+    const double mapping[] = {-1, -2};
+    const double positive[] = {1};
+    const double negative[] = {-1};
+
+    std::vector<exact_h::Row> bounds, equalities, projected, expected;
+    REQUIRE(exact_h::append_inequality(upper, 1, true, limits.max_integer_bits, bounds));
+    REQUIRE(exact_h::append_inequality(lower, 0, false, limits.max_integer_bits, bounds));
+    auto opposing_rows = bounds;
+    REQUIRE(exact_h::append_equality(mapping, 0, limits.max_integer_bits, opposing_rows));
+    CHECK(exact_h::feasible(std::move(opposing_rows), 2, limits).state ==
+          FeasibilityState::unsupported);
+
+    exact_h::Row equation;
+    REQUIRE(exact_h::make_row(mapping, 0, false, limits.max_integer_bits, equation));
+    equalities.push_back(equation);
+    REQUIRE(exact_h::append_inequality(positive, 0, false, limits.max_integer_bits, expected));
+    REQUIRE(exact_h::append_inequality(negative, 2, true, limits.max_integer_bits, expected));
+
+    const auto result = exact_h::feasible(bounds, 2, limits, std::stop_token{}, 1,
+                                          &projected, equalities);
+    REQUIRE(result.state == FeasibilityState::feasible);
+    CHECK(result.generated_rows == 0);
+    CHECK(exact_h::included_in(projected, expected, 1).state == InclusionState::included);
+    CHECK(exact_h::included_in(expected, projected, 1).state == InclusionState::included);
+
+    limits.max_operations = 1;
+    CHECK(exact_h::feasible(bounds, 2, limits, std::stop_token{}, 1,
+                            &projected, equalities).state == FeasibilityState::unsupported);
+    CHECK(projected.empty());
+}
+
+TEST_CASE("contradictory eliminated equalities are infeasible") {
+    const double coefficients[] = {0, 1};
+    std::vector<exact_h::Row> equalities(2), projected;
+    REQUIRE(exact_h::make_row(coefficients, 1, false, 8192, equalities[0]));
+    REQUIRE(exact_h::make_row(coefficients, 2, false, 8192, equalities[1]));
+
+    using exact_h::FeasibilityState;
+    CHECK(exact_h::feasible({}, 2, {}, std::stop_token{}, 1,
+                            &projected, equalities).state == FeasibilityState::infeasible);
+    CHECK(projected.empty());
+
+    std::stop_source source;
+    source.request_stop();
+    CHECK(exact_h::feasible({}, 2, {}, source.get_token(), 1,
+                            &projected, equalities).state == FeasibilityState::cancelled);
+}
