@@ -88,8 +88,6 @@ struct FeedbackGeometryDependencies {
     NominalTubeDependencies geometry;
     registry::PreparedProvider<registry::LPPort> support;
     std::size_t max_generators_per_stage;
-    // Bounded opt-in projection of the original history, serialized as an outer H set.
-    FeedbackPolytopeHistory polytope_history{FeedbackPolytopeHistory::stagewise};
 };
 
 // A deliberately coarse cover for a clipped bounded H intersection. This is
@@ -103,5 +101,11 @@ FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem&, Reque
     const SetHandle& terminal_feasibility, FeedbackFamily,
     const std::vector<StrictCoordinateLowerBound>& strict_source_domain,
     const FeedbackGeometryDependencies&, const ExecutionContext&);
+
+// Certified whole-history mode is an opt-in outer H enclosure of the original affine history.
+FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem&, RequestId,
+    const SetHandle& terminal_feasibility, FeedbackFamily,
+    const std::vector<StrictCoordinateLowerBound>& strict_source_domain,
+    const FeedbackGeometryDependencies&, FeedbackPolytopeHistory, const ExecutionContext&);
 
 } // namespace csl::reachability

@@ -981,7 +981,7 @@ Json feedback_export(const problem::ResolvedProblem& resolved, const Json& in,
         ? FeedbackPolytopeHistory::certified_whole_history : FeedbackPolytopeHistory::stagewise;
     auto outcome = feedback_geometry(resolved, {in.at("request_id").get<std::string>()},
         terminal.as_handle(), found->second, strict,
-        {{forward, intersection}, feedback_provider(lp, "csl.program-result.v1"), max_generators, polytope_history}, {});
+        {{forward, intersection}, feedback_provider(lp, "csl.program-result.v1"), max_generators}, polytope_history, {});
     const auto* failure = std::get_if<FeedbackGeometryFailure>(&outcome);
     const auto& geometry = failure ? failure->prefix : std::get<FeedbackGeometry>(outcome);
     Json result{{"family", name}, {"scope", "forward_relevant_from_observation"},

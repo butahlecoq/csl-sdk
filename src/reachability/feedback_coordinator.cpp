@@ -13,6 +13,7 @@
 #include <limits>
 #include <new>
 #include <numeric>
+#include <span>
 #include <stdexcept>
 
 namespace csl::reachability {
@@ -314,6 +315,51 @@ namespace rational = csl::synthesis::detail::exact_rational;
     throw Failure{OperationStopped{StopReason::resource_limit, std::move(message)}};
 }
 
+void check_exact_history_stop(const ExecutionContext& context) {
+    if (context.cancellation.stop_requested())
+        throw Failure{OperationStopped{StopReason::cancelled, "Exact history geometry was cancelled."}};
+    if (context.deadline && std::chrono::steady_clock::now() >= *context.deadline)
+        throw Failure{OperationStopped{StopReason::deadline_expired, "Exact history geometry reached its deadline."}};
+}
+
+void preflight_exact_history(std::size_t n, std::size_t m, std::size_t horizon,
+        const std::vector<AdmissibleSet>& states, const std::vector<AdmissibleSet>& controls,
+        const SetHandle& terminal) {
+    const exact_h::Limits limits;
+    if (n > limits.max_variables || m > limits.max_variables ||
+        horizon > (limits.max_variables - n) / (n + m))
+        exact_history_limit("The original history exceeds the exact projection dimension limit.");
+    std::size_t remaining_rows = limits.max_rows - n * (horizon + 1);
+    const auto charge = [&](std::size_t count) {
+        if (count > remaining_rows)
+            exact_history_limit("The exact history relation exceeded the row limit.");
+        remaining_rows -= count;
+    };
+    const auto check = [&](const AdmissibleSet& set) {
+        if (const auto* handle = std::get_if<SetHandle>(&set)) {
+            const auto data = import(*handle);
+            const auto representation = data.representation();
+            if (const auto* h = std::get_if<sets::HRepresentation>(&representation)) {
+                charge(h->inequalities.rows());
+                charge(h->equalities.rows());
+            } else if (const auto* singleton = std::get_if<sets::SingletonRepresentation>(&representation)) {
+                charge(singleton->point.size());
+            } else if (std::holds_alternative<sets::EmptyRepresentation>(representation)) {
+                charge(1);
+            }
+        } else if (const auto* singleton = std::get_if<Singleton>(&set)) {
+            charge(singleton->point.size());
+        } else if (std::holds_alternative<EmptySet>(set)) {
+            charge(1);
+        }
+    };
+    for (const auto& state : states)
+        check(state);
+    for (const auto& control : controls)
+        check(control);
+    check(AdmissibleSet{terminal});
+}
+
 enclosure::Interval exact_interval(double lo, double hi, enclosure::Budget& budget) {
     enclosure::Interval interval;
     if (!rational::from_binary64(lo, interval.lower, budget) ||
@@ -335,6 +381,7 @@ OperationResult certified_history_projection(Runner& run, const Rows& source,
         out.reserve(matrix.rows);
         const auto first = run.stage * dimension;
         for (std::size_t i = 0; i < matrix.rows; ++i) {
+            check_exact_history_stop(run.context);
             const auto start = matrix.values.begin() + static_cast<std::ptrdiff_t>(i * variables);
             const auto selected = start + static_cast<std::ptrdiff_t>(first);
             const auto after = selected + static_cast<std::ptrdiff_t>(dimension);
@@ -365,11 +412,13 @@ OperationResult certified_history_projection(Runner& run, const Rows& source,
         rows.append(Vector(dimension, 0), -1);
     enclosure::Budget budget;
     for (const auto& row : projected) {
+        check_exact_history_stop(run.context);
         auto enclosed = enclosure::enclose_upper_row(row, box, budget);
         if (!enclosed)
             exact_history_limit("The exact history projection could not be enclosed in binary64.");
         rows.append(std::move(enclosed->coefficients), enclosed->bound);
     }
+    check_exact_history_stop(run.context);
     const auto key = run.id(role);
     auto set = rows.finish({key + "/set"}, labels);
     GeometryEvidence evidence{{{run.problem, {key}, {key + "/mathematical-projection"}},
@@ -389,9 +438,6 @@ void certified_history_geometry(FeedbackGeometry& output, Runner& run, const mod
         const std::vector<StrictCoordinateLowerBound>& strict, StageIndex& active,
         FeedbackGeometryPhase& phase) {
     const auto n = initial.size(), m = system.dimensions().control, horizon = system.horizon();
-    constexpr auto max_variables = exact_h::default_max_variables;
-    if (n > max_variables || m > max_variables || horizon > (max_variables - n) / (n + m))
-        exact_history_limit("The original history exceeds the exact projection dimension limit.");
     const auto state_variables = n * (horizon + 1);
     Rows history(state_variables + m * horizon);
     std::vector<std::vector<enclosure::Interval>> boxes(horizon + 1);
@@ -489,6 +535,14 @@ void certified_history_geometry(FeedbackGeometry& output, Runner& run, const mod
 FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem& resolved,RequestId request,
         const SetHandle& terminal,FeedbackFamily family,const std::vector<StrictCoordinateLowerBound>& strict,
         const FeedbackGeometryDependencies& deps,const ExecutionContext& context) {
+    return feedback_geometry(resolved, std::move(request), terminal, family, strict,
+                             deps, FeedbackPolytopeHistory::stagewise, context);
+}
+
+FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem& resolved, RequestId request,
+        const SetHandle& terminal, FeedbackFamily family, const std::vector<StrictCoordinateLowerBound>& strict,
+        const FeedbackGeometryDependencies& deps, FeedbackPolytopeHistory polytope_history,
+        const ExecutionContext& context) {
     FeedbackGeometry output{resolved.identity(),request,family,FeedbackScope::forward_relevant_from_observation,{}};
     FeedbackGeometryPhase phase=FeedbackGeometryPhase::forward; StageIndex active{0};
     Runner run{deps,context,resolved.identity(),request};
@@ -505,6 +559,12 @@ FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem& resolv
         if(auto* state=std::get_if<SetHandle>(&source->states.front())) labels=import(*state).metadata()->coordinate_labels;
         for(const auto& predicate:strict) if(predicate.coordinate>=n || !std::isfinite(predicate.lower_bound))
             bad("feedback.strict-domain","Strict source predicate is invalid.");
+        if (polytope_history == FeedbackPolytopeHistory::certified_whole_history) {
+            check_exact_history_stop(context);
+            if (family != FeedbackFamily::polytope)
+                bad("feedback.polytope-history", "Certified whole-history projection requires the polytope family.");
+            preflight_exact_history(n, m, horizon, source->states, continuous->stages, terminal);
+        }
         std::vector<SetHandle> states,controls;
         for(const auto& item:source->states) if(const auto* h=std::get_if<SetHandle>(&item)) run.source_ids.push_back(h->id);
         for(const auto& item:continuous->stages) if(const auto* h=std::get_if<SetHandle>(&item)) run.source_ids.push_back(h->id);
@@ -520,11 +580,10 @@ FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem& resolv
             FeedbackGeometryStage stage; stage.stage={k}; stage.coordinates.resize(n);
             std::iota(stage.coordinates.begin(),stage.coordinates.end(),0); output.stages.push_back(std::move(stage));
         }
-        if (deps.polytope_history == FeedbackPolytopeHistory::certified_whole_history) {
-            if (family != FeedbackFamily::polytope)
-                bad("feedback.polytope-history", "Certified whole-history projection requires the polytope family.");
+        if (polytope_history == FeedbackPolytopeHistory::certified_whole_history) {
             certified_history_geometry(output, run, system, states, controls, terminal_h, initial,
                                        labels, strict, active, phase);
+            check_exact_history_stop(context);
             return output;
         }
         auto selected=shape(family,axis_h(initial,initial,{run.id("initial-h")},labels),initial,initial,{run.id("initial")},labels);
