@@ -82,10 +82,14 @@ struct FeedbackGeometryFailure {
     std::vector<SetHandle> pending_input_carriers;
 };
 using FeedbackGeometryOutcome = std::variant<FeedbackGeometry, FeedbackGeometryFailure>;
+enum class FeedbackPolytopeHistory { stagewise, certified_whole_history };
+
 struct FeedbackGeometryDependencies {
     NominalTubeDependencies geometry;
     registry::PreparedProvider<registry::LPPort> support;
     std::size_t max_generators_per_stage;
+    // Bounded opt-in projection of the original history, serialized as an outer H set.
+    FeedbackPolytopeHistory polytope_history{FeedbackPolytopeHistory::stagewise};
 };
 
 // A deliberately coarse cover for a clipped bounded H intersection. This is

@@ -5,7 +5,7 @@
 #include <csl/reachability/finite_plan_ellipsoid.hpp>
 #include <csl/reachability/nominal_predecessor.hpp>
 #include <csl/sets/data.hpp>
-#include "../synthesis/exact_h_polytope.hpp"
+#include "../synthesis/exact_h_enclosure.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -307,6 +307,183 @@ Matrix copy_matrix(const numeric::MatrixView& view) {
     for(std::size_t i=0;i<view.rows();++i) for(std::size_t j=0;j<view.cols();++j) out.values.push_back(view(i,j));
     return out;
 }
+namespace enclosure = csl::synthesis::detail::exact_h_enclosure;
+namespace rational = csl::synthesis::detail::exact_rational;
+
+[[noreturn]] void exact_history_limit(std::string message) {
+    throw Failure{OperationStopped{StopReason::resource_limit, std::move(message)}};
+}
+
+enclosure::Interval exact_interval(double lo, double hi, enclosure::Budget& budget) {
+    enclosure::Interval interval;
+    if (!rational::from_binary64(lo, interval.lower, budget) ||
+        !rational::from_binary64(hi, interval.upper, budget))
+        exact_history_limit("An exact history coordinate bound exceeded the arithmetic budget.");
+    return interval;
+}
+
+OperationResult certified_history_projection(Runner& run, const Rows& source,
+        std::span<const enclosure::Interval> box, const std::vector<std::string>& labels,
+        const char* role, std::vector<SetId> inputs) {
+    const auto dimension = box.size();
+    const auto variables = source.a.cols;
+    exact_h::Limits limits;
+    if (source.a.rows > limits.max_rows || source.e.rows > limits.max_rows - source.a.rows)
+        exact_history_limit("The exact history relation exceeded the row limit.");
+    std::vector<exact_h::Row> bounds, equations;
+    const auto copy = [&](const Matrix& matrix, const Vector& rhs, std::vector<exact_h::Row>& out) {
+        out.reserve(matrix.rows);
+        const auto first = run.stage * dimension;
+        for (std::size_t i = 0; i < matrix.rows; ++i) {
+            const auto start = matrix.values.begin() + static_cast<std::ptrdiff_t>(i * variables);
+            const auto selected = start + static_cast<std::ptrdiff_t>(first);
+            const auto after = selected + static_cast<std::ptrdiff_t>(dimension);
+            Vector row;
+            row.reserve(variables);
+            row.insert(row.end(), selected, after);
+            row.insert(row.end(), start, selected);
+            row.insert(row.end(), after, start + static_cast<std::ptrdiff_t>(variables));
+            if (!exact_h::append_inequality(row, rhs[i], false, limits.max_integer_bits, out))
+                exact_history_limit("An exact history row exceeded the arithmetic budget.");
+        }
+    };
+    copy(source.a, source.b, bounds);
+    copy(source.e, source.f, equations);
+    std::vector<exact_h::Row> projected;
+    const auto result = exact_h::feasible(std::move(bounds), variables, limits,
+        ExactCancellation{run.context}, dimension, &projected, std::move(equations));
+    if (result.state == exact_h::FeasibilityState::cancelled) {
+        const auto reason = run.context.cancellation.stop_requested()
+            ? StopReason::cancelled : StopReason::deadline_expired;
+        throw Failure{OperationStopped{reason, result.reason}};
+    }
+    if (result.state == exact_h::FeasibilityState::unsupported)
+        exact_history_limit(result.reason);
+
+    Rows rows(dimension);
+    if (result.state == exact_h::FeasibilityState::infeasible)
+        rows.append(Vector(dimension, 0), -1);
+    enclosure::Budget budget;
+    for (const auto& row : projected) {
+        auto enclosed = enclosure::enclose_upper_row(row, box, budget);
+        if (!enclosed)
+            exact_history_limit("The exact history projection could not be enclosed in binary64.");
+        rows.append(std::move(enclosed->coefficients), enclosed->bound);
+    }
+    const auto key = run.id(role);
+    auto set = rows.finish({key + "/set"}, labels);
+    GeometryEvidence evidence{{{run.problem, {key}, {key + "/mathematical-projection"}},
+                               std::move(inputs)}, GeometryClaimScope::set_relation,
+        SymbolicArgument{"Exact equality substitution followed by Fourier–Motzkin projection",
+                         "Exact interval bounds and normal-error allowance before outward binary64 rounding"},
+        {"The original stored affine dynamics and closed-H source constraints define the ideal set.",
+         "Strict source predicates remain attached separately."}, {}};
+    run.requests.push_back(evidence.reference);
+    run.lineage.push_back(evidence);
+    return {std::move(set), SetRelation::outer, std::move(evidence)};
+}
+
+void certified_history_geometry(FeedbackGeometry& output, Runner& run, const model::LinearSystem& system,
+        const std::vector<SetHandle>& states, const std::vector<SetHandle>& controls, const SetHandle& terminal,
+        const Vector& initial, const std::vector<std::string>& labels,
+        const std::vector<StrictCoordinateLowerBound>& strict, StageIndex& active,
+        FeedbackGeometryPhase& phase) {
+    const auto n = initial.size(), m = system.dimensions().control, horizon = system.horizon();
+    constexpr auto max_variables = exact_h::default_max_variables;
+    if (n > max_variables || m > max_variables || horizon > (max_variables - n) / (n + m))
+        exact_history_limit("The original history exceeds the exact projection dimension limit.");
+    const auto state_variables = n * (horizon + 1);
+    Rows history(state_variables + m * horizon);
+    std::vector<std::vector<enclosure::Interval>> boxes(horizon + 1);
+    enclosure::Budget budget;
+    for (std::size_t i = 0; i < n; ++i) {
+        Vector row(history.a.cols, 0);
+        row[i] = 1;
+        history.append(std::move(row), initial[i], true);
+        boxes.front().push_back(exact_interval(initial[i], initial[i], budget));
+    }
+    const auto save = [&](const OperationResult& result, std::vector<SetId> inputs,
+                          const char* construction) {
+        inputs.push_back(result.output.id);
+        auto member = record(run, FeedbackFamily::polytope, FeedbackHMembership{result.output, {}},
+                             strict, std::move(inputs));
+        member.assurance = Assurance::validated;
+        member.construction = {construction};
+        return member;
+    };
+    std::vector<SetId> inputs;
+    for (std::size_t k = 0; k <= horizon; ++k) {
+        run.stage = k;
+        active = {k};
+        auto& stage = output.stages[k];
+        history.add(import(states[k]), k * n);
+        inputs.push_back(states[k].id);
+        if (k > 0) {
+            const auto dynamics = take<model::DynamicsStage>(system.stage({k - 1}));
+            const auto control_offset = state_variables + (k - 1) * m;
+            history.add(import(controls[k - 1]), control_offset);
+            inputs.push_back(controls[k - 1].id);
+            const auto [lo, hi] = explicit_bounds(controls[k - 1], run.context);
+            std::vector<enclosure::Interval> control_box;
+            for (std::size_t j = 0; j < m; ++j)
+                control_box.push_back(exact_interval(lo[j], hi[j], budget));
+            for (std::size_t i = 0; i < n; ++i) {
+                Vector row(history.a.cols, 0);
+                auto interval = exact_interval(dynamics.offset[i], dynamics.offset[i], budget);
+                for (std::size_t j = 0; j < n; ++j) {
+                    row[(k - 1) * n + j] = -dynamics.A(i, j);
+                    if (!enclosure::accumulate_scaled_interval(interval, dynamics.A(i, j),
+                                                               boxes[k - 1][j], budget))
+                        exact_history_limit("Exact affine state bounds exceeded the arithmetic budget.");
+                }
+                for (std::size_t j = 0; j < m; ++j) {
+                    row[control_offset + j] = -dynamics.B(i, j);
+                    if (!enclosure::accumulate_scaled_interval(interval, dynamics.B(i, j),
+                                                               control_box[j], budget))
+                        exact_history_limit("Exact affine control bounds exceeded the arithmetic budget.");
+                }
+                row[k * n + i] = 1;
+                history.append(std::move(row), dynamics.offset[i], true);
+                boxes[k].push_back(std::move(interval));
+            }
+        }
+        stage.forward_h = certified_history_projection(run, history, boxes[k], labels,
+                                                        "whole-history-prefix", inputs);
+        stage.forward_embedding_h = stage.forward_h->output;
+        stage.forward = save(*stage.forward_h, inputs, "Projection of the original feasible prefix onto this state.");
+    }
+
+    history.add(import(terminal), horizon * n);
+    inputs.push_back(terminal.id);
+    for (std::size_t remaining = horizon + 1; remaining > 0; --remaining) {
+        const auto k = remaining - 1;
+        active = {k};
+        run.stage = k;
+        phase = k == horizon ? FeedbackGeometryPhase::terminal : FeedbackGeometryPhase::backward;
+        auto& stage = output.stages[k];
+        stage.backward_h = certified_history_projection(run, history, boxes[k], labels,
+                                                         "whole-history-terminal-feasible", inputs);
+        stage.backward_embedding_h = stage.backward_h->output;
+        stage.backward = save(*stage.backward_h, inputs,
+            "Projection of the original terminal-feasible history onto this state.");
+        phase = FeedbackGeometryPhase::intersection;
+        // Every terminal-feasible history satisfies its original forward prefix.
+        Rows overlap(n);
+        overlap.add(import(stage.backward_h->output), 0);
+        const auto key = run.id("whole-history-overlap");
+        auto set = overlap.finish({key + "/set"}, labels);
+        GeometryEvidence evidence{{{run.problem, {key}, {key + "/mathematical-intersection"}},
+            {stage.forward->id, stage.backward->id}}, GeometryClaimScope::set_relation,
+            SymbolicArgument{"Terminal-feasible histories satisfy every original prefix",
+                             "The outer backward marginal also encloses the exact intersection."}, {}, {}};
+        run.requests.push_back(evidence.reference);
+        run.lineage.push_back(evidence);
+        stage.intersection_h = OperationResult{std::move(set), SetRelation::outer, std::move(evidence)};
+        stage.intersection = save(*stage.intersection_h, {stage.forward->id, stage.backward->id},
+            "Terminal-feasible histories already satisfy the forward prefix and define the exact overlap.");
+    }
+}
+
 } // namespace
 
 FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem& resolved,RequestId request,
@@ -342,6 +519,13 @@ FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem& resolv
         for(std::size_t k=0;k<=horizon;++k) {
             FeedbackGeometryStage stage; stage.stage={k}; stage.coordinates.resize(n);
             std::iota(stage.coordinates.begin(),stage.coordinates.end(),0); output.stages.push_back(std::move(stage));
+        }
+        if (deps.polytope_history == FeedbackPolytopeHistory::certified_whole_history) {
+            if (family != FeedbackFamily::polytope)
+                bad("feedback.polytope-history", "Certified whole-history projection requires the polytope family.");
+            certified_history_geometry(output, run, system, states, controls, terminal_h, initial,
+                                       labels, strict, active, phase);
+            return output;
         }
         auto selected=shape(family,axis_h(initial,initial,{run.id("initial-h")},labels),initial,initial,{run.id("initial")},labels);
         SetHandle selected_h=axis_h(initial,initial,{run.id("initial-embedding")},labels);

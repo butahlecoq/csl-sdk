@@ -974,9 +974,14 @@ Json feedback_export(const problem::ResolvedProblem& resolved, const Json& in,
     auto intersection = feedback_provider(geometry::polyhedral::make_intersection_registration(), "csl.polyhedron.h");
     std::vector<StrictCoordinateLowerBound> strict;
     if(in.at("task_id") == "env717-earth-orbit/continuous-receding/1") strict.push_back({0, 0});
+    const auto history_method = in.value("polytope_history", std::string{"stagewise"});
+    if(history_method != "stagewise" && history_method != "certified_whole_history")
+        throw std::runtime_error("unknown polytope history method");
+    const auto polytope_history = history_method == "certified_whole_history"
+        ? FeedbackPolytopeHistory::certified_whole_history : FeedbackPolytopeHistory::stagewise;
     auto outcome = feedback_geometry(resolved, {in.at("request_id").get<std::string>()},
         terminal.as_handle(), found->second, strict,
-        {{forward, intersection}, feedback_provider(lp, "csl.program-result.v1"), max_generators}, {});
+        {{forward, intersection}, feedback_provider(lp, "csl.program-result.v1"), max_generators, polytope_history}, {});
     const auto* failure = std::get_if<FeedbackGeometryFailure>(&outcome);
     const auto& geometry = failure ? failure->prefix : std::get<FeedbackGeometry>(outcome);
     Json result{{"family", name}, {"scope", "forward_relevant_from_observation"},

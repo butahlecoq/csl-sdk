@@ -3,7 +3,7 @@
 #include <cmath>
 #include <limits>
 
-#include "synthesis/exact_rational.hpp"
+#include "synthesis/exact_h_enclosure.hpp"
 
 using namespace csl::synthesis::detail::exact_rational;
 
@@ -186,4 +186,40 @@ TEST_CASE("contradictory eliminated equalities are infeasible") {
     source.request_stop();
     CHECK(exact_h::feasible({}, 2, {}, source.get_token(), 1,
                             &projected, equalities).state == FeasibilityState::cancelled);
+}
+
+TEST_CASE("rounded H rows cover the exact boundary despite losing normal bits") {
+    using namespace csl::synthesis::detail::exact_h_enclosure;
+    Budget budget;
+    Rational minus_one, zero;
+    REQUIRE(make_integer(-1, minus_one, budget));
+    REQUIRE(make_integer(0, zero, budget));
+    const Interval box[] = {{minus_one, zero}};
+    const exact_h::Row row{{exact_h::exact_detail::from_u64((std::uint64_t{1} << 54) + 1)},
+                            exact_h::exact_detail::from_u64((std::uint64_t{1} << 54) + 1, true)};
+    const auto rounded = enclose_upper_row(row, box, budget);
+    REQUIRE(rounded);
+    CHECK(rounded->coefficients == std::vector<double>{0.5});
+    CHECK(rounded->bound == -0.5);
+
+    const Interval reversed[] = {{zero, minus_one}};
+    CHECK_FALSE(enclose_upper_row(row, reversed, budget));
+    Budget exhausted;
+    exhausted.max_operations = 0;
+    CHECK_FALSE(enclose_upper_row(row, box, exhausted));
+}
+
+TEST_CASE("negative affine coefficients exchange interval endpoints") {
+    using namespace csl::synthesis::detail::exact_h_enclosure;
+    Budget budget;
+    Rational one, two, three, minus_five, minus_three;
+    REQUIRE(make_integer(1, one, budget));
+    REQUIRE(make_integer(2, two, budget));
+    REQUIRE(make_integer(3, three, budget));
+    REQUIRE(make_integer(-5, minus_five, budget));
+    REQUIRE(make_integer(-3, minus_three, budget));
+    Interval total{one, one};
+    REQUIRE(accumulate_scaled_interval(total, -2, Interval{two, three}, budget));
+    CHECK(same(total.lower, minus_five, budget));
+    CHECK(same(total.upper, minus_three, budget));
 }
