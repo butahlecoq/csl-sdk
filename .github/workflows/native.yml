@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: butahlecoq/controlled-systems-lab
-          ref: 118048a213a20b9401455b167cb7e9d853f94c9c
+          ref: 7246c67daab1fb4cc634ba73fbbf2a457691c679
           path: research
           persist-credentials: false
           sparse-checkout: |
@@ -40,7 +40,10 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Build and independently check the downstream research result
         run: |
-          cmake -S research/benchmarks -B build/research -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$RUNNER_TEMP/csl-sdk"
+          sdk_version=$(sed -n 's/^CMAKE_PROJECT_VERSION:STATIC=//p' build/sdk/CMakeCache.txt)
+          test -n "$sdk_version"
+          cmake -S research/benchmarks -B build/research -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_PREFIX_PATH=$RUNNER_TEMP/csl-sdk" "-DCSL_RESEARCH_SDK_VERSION=$sdk_version"
           cmake --build build/research --parallel 2
           ctest --test-dir build/research --output-on-failure --no-tests=error
   sdk-profiles:
