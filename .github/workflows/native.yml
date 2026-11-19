@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: butahlecoq/controlled-systems-lab
-          ref: 118048a213a20b9401455b167cb7e9d853f94c9c
+          ref: 7246c67daab1fb4cc634ba73fbbf2a457691c679
           path: research
           persist-credentials: false
           sparse-checkout: |
@@ -40,9 +40,39 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Build and independently check the downstream research result
         run: |
-          cmake -S research/benchmarks -B build/research -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$RUNNER_TEMP/csl-sdk"
+          sdk_version=$(sed -n 's/^CMAKE_PROJECT_VERSION:STATIC=//p' build/sdk/CMakeCache.txt)
+          test -n "$sdk_version"
+          cmake -S research/benchmarks -B build/research -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_PREFIX_PATH=$RUNNER_TEMP/csl-sdk" "-DCSL_RESEARCH_SDK_VERSION=$sdk_version"
           cmake --build build/research --parallel 2
           ctest --test-dir build/research --output-on-failure --no-tests=error
+  sdk-profiles:
+    name: ${{ matrix.compiler }} / ${{ matrix.preset }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { compiler: MSVC x64, os: windows-2022, preset: dev-windows, cc: cl, cxx: cl }
+          - { compiler: Clang 18, os: ubuntu-24.04, preset: dev, cc: clang-18, cxx: clang++-18 }
+          - { compiler: GCC 13, os: ubuntu-24.04, preset: core, cc: gcc-13, cxx: g++-13 }
+          - { compiler: GCC 13, os: ubuntu-24.04, preset: highs, cc: gcc-13, cxx: g++-13 }
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - run: python -m pip install cmake==3.31.6
+      - run: cmake --preset ${{ matrix.preset }}
+      - run: cmake --build --preset ${{ matrix.preset }}
+      - run: ctest --preset ${{ matrix.preset }} --output-on-failure --no-tests=error
+
   casadi-strategies:
     name: Real IPOPT through both control strategies
     runs-on: ubuntu-24.04
