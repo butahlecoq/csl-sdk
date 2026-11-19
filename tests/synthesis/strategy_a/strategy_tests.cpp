@@ -861,8 +861,10 @@ TEST_CASE("Strategy A can project a thin forward step from its joint H factor") 
     CHECK(std::none_of(last.providers.begin(), last.providers.end(), [](const auto &provider) {
         return provider.actual_module && provider.actual_module->value == "csl.conversion.qhull";
     }));
-    REQUIRE_FALSE(result.incumbents.empty());
-    CHECK(result.incumbents.front().witness.states.back().front() == doctest::Approx(9));
+    REQUIRE(candidate.terminal);
+    REQUIRE(candidate.terminal->optimization);
+    REQUIRE(candidate.terminal->optimization->primal);
+    CHECK(candidate.terminal->optimization->primal->front() == doctest::Approx(9));
 }
 
 TEST_CASE("Strategy A runs source-index hulls in a 2D control tube and selects a separate terminal optimizer") {
