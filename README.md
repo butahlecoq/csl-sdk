@@ -45,6 +45,43 @@ cmake --build build/examples --config Release --parallel 4
 ctest --test-dir build/examples -C Release --output-on-failure --no-tests=error
 ```
 
+## Discover and check a reachability example
+
+If you are exploring the SDK yourself or delegating to a coding agent, start
+with the installed example build from the quick start. CTest can describe its
+registered tests as JSON. The native catalogue lists the stable IDs of its
+reachability cases.
+
+```sh
+cmake --build build/examples --config Release --target native_model_catalogue --parallel 4
+ctest --test-dir build/examples -C Release --show-only=json-v1
+ctest --test-dir build/examples -C Release -R '^native_catalogue_source_cases$' --no-tests=error --output-on-failure
+```
+
+With a single-configuration build, run the catalogue from the checkout root.
+With Visual Studio, the executable is `build/examples/Release/native_model_catalogue.exe`.
+Give each export a new directory.
+
+```sh
+build/examples/native_model_catalogue --list
+build/examples/native_model_catalogue build/slide33
+```
+
+The export covers the seven- and eight-transition variants of a three-state
+model with one control. Read `build/slide33/full-state-v-points.csv`. For case
+`bulaev-2016-slide33/illustrated-seven/1`, select stage 7 and take the minimum
+of `x1`. It should be **−63.5**. You can check that number directly. The first
+coordinate starts as low as −0.5 and changes by `3u` per step. Applying the
+lowest allowed control, −3, for seven steps gives −0.5 + 7 × 3 × (−3) = −63.5.
+Open `build/slide33/native-model-catalogue-screen.svg` to see the projections
+from the same run. When sharing a result, include the SDK commit, case ID and
+stage. [Illustrated example](https://butahlecoq.github.io/controlled-systems-lab/examples/native-model-catalogue.html)
+
+For module substitutions, the research project's
+[composition inventory](https://github.com/butahlecoq/controlled-systems-lab/blob/main/docs/catalogue/module-composition-inventory-v1.json)
+records module IDs, build-dependent classifications and limitations at its
+audited revision.
+
 ## Use CSL in a CMake project
 
 ```cmake
