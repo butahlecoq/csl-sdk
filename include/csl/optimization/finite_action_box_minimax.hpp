@@ -71,6 +71,10 @@ using FiniteActionBoxMinimaxOutcome = std::variant<FiniteActionBoxMinimaxResult,
 // complete only when every declared plan received a score. The box score is
 // numerical enclosure evidence, not a validated optimality bound or a
 // complete-family claim when coverage is incomplete.
+// For a convex diagonal quadratic, a single maximizing corner is found by
+// independent endpoint comparisons and consumes one corner evaluation. The
+// dense coefficient check is O(n^2) once per request. Choosing the corner is
+// O(n) per plan, followed by one numerical objective evaluation.
 // For horizon H, state/control/external dimensions n/m/q, A actions per stage,
 // P=A^H plans, C=2^n terminal corners, and R initial-disturbance histories
 // for the selected plan, work is O(P[Hn(n+m+q)+C C_obj]+RHn(n+m+q)); C_obj
