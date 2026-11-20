@@ -797,6 +797,17 @@ SynthesisResult run_strategy_a(const problem::ResolvedProblem& p,const FamilyReq
     return accepted(workspace->run(context));
 }
 class ZeroHistoryOptimizer final : public optimization::HistoryOptimizerWorkspace {
+    std::stop_source *stop_after_history_;
+
+public:
+    explicit ZeroHistoryOptimizer(std::stop_source *stop_after_history)
+        : stop_after_history_(stop_after_history) {}
+    ~ZeroHistoryOptimizer() override {
+        if (stop_after_history_)
+            stop_after_history_->request_stop();
+    }
+
+private:
     optimization::RawHistorySolveOutcome
     solve_candidate(const optimization::HistoryOptimizationRequest &request,
                     const ExecutionContext &) override {
@@ -845,7 +856,7 @@ class ZeroHistoryOptimizer final : public optimization::HistoryOptimizerWorkspac
             "deterministic zero-history integration fixture", std::move(witnesses)};
     }
 };
-registry::PreparedProvider<registry::HistoryOptimizerPort> zero_history_optimizer() {
+registry::PreparedProvider<registry::HistoryOptimizerPort> zero_history_optimizer(std::stop_source *stop_after_history = nullptr) {
     registry::Registry<registry::HistoryOptimizerPort> providers;
     REQUIRE_FALSE(
         providers.add({{{"test.zero-history-optimizer"}, "1"},
@@ -853,9 +864,9 @@ registry::PreparedProvider<registry::HistoryOptimizerPort> zero_history_optimize
                           const registry::Requirements &requirements) -> registry::Capability {
                            return registry::Offer{requirements.output};
                        },
-                       [](const optimization::HistoryOptimizationRequest &)
+                       [stop_after_history](const optimization::HistoryOptimizationRequest &)
                            -> std::unique_ptr<optimization::HistoryOptimizerWorkspace> {
-                           return std::make_unique<ZeroHistoryOptimizer>();
+                           return std::make_unique<ZeroHistoryOptimizer>(stop_after_history);
                        }}));
     registry::Requirements requirements;
     requirements.output.representation = {"csl.history-optimization-result.v1"};
@@ -1312,9 +1323,9 @@ TEST_CASE("Strategy B executes the real CasADi-IPOPT history optimizer with type
     CHECK(result.history_optimization->provider.actual_module->value == identity.id.value);
 }
 #endif
-TEST_CASE("Strategy B invokes the prepared whole-history optimizer before its terminal solver") {
+TEST_CASE("Strategy B source-cost requests do not invoke a terminal-only solver") {
     const auto problem = resolve(integrator());
-    const auto family = request(problem);
+    auto family = request(problem);
     auto profile = std::make_shared<const optimization::StrategyHistoryOptimizationProfile>(
         optimization::StrategyHistoryOptimizationProfile{ProgramId{"strategy-b-history-run"},
                                                          {{}, 0, {}},
@@ -1322,10 +1333,19 @@ TEST_CASE("Strategy B invokes the prepared whole-history optimizer before its te
                                                          "state",
                                                          typed_history_memberships(),
                                                          optimization::ColdStart{}});
-    const auto prepared =
-        registered_prepared(problem, family, false, Termination::completed, nullptr, {},
-                            MathematicalOutcome::optimal, zero_history_optimizer(), profile);
+    bool terminal_called = false;
+    std::stop_source verifier_stop;
+    bool cancel_during_verification = false;
+    SUBCASE("normal completion") {}
+    SUBCASE("cancel after verified history") { cancel_during_verification = true; }
+    SUBCASE("refuse a history beyond the row limit") { family.materialization_limit = 1; }
+    auto optimizer = zero_history_optimizer(cancel_during_verification ? &verifier_stop : nullptr);
+    const auto prepared = registered_prepared(
+        problem, family, false, Termination::completed, nullptr,
+        [&] { terminal_called = true; }, MathematicalOutcome::optimal, std::move(optimizer),
+        profile);
     ExecutionContext context;
+    context.cancellation = verifier_stop.get_token();
     context.resources = std::make_shared<const ResourcePolicy>(ResourcePolicy{1, 1, 1, {}});
     const auto result = accepted(prepared.create()->run(context));
     INFO("termination=" << static_cast<int>(result.termination) << " stop=" << result.stop.index()
@@ -1336,6 +1356,30 @@ TEST_CASE("Strategy B invokes the prepared whole-history optimizer before its te
         for (const auto &diagnostic : failure->diagnostics)
             diagnostic_text += diagnostic.field + ": " + diagnostic.explanation + "; ";
     INFO("diagnostics=" << diagnostic_text);
+    CHECK_FALSE(terminal_called);
+    if (family.materialization_limit) {
+        CHECK(result.termination == Termination::resource_limit);
+        CHECK_FALSE(result.history_optimization);
+        CHECK_FALSE(result.family);
+        return;
+    }
+    if (cancel_during_verification) {
+        REQUIRE(result.history_optimization);
+        CHECK(result.history_optimization->result);
+        CHECK(result.termination == Termination::cancelled);
+        REQUIRE(std::holds_alternative<ScopedOperationStopped>(result.stop));
+        const auto &stopped = std::get<ScopedOperationStopped>(result.stop);
+        CHECK(stopped.stop.reason == StopReason::cancelled);
+        CHECK(stopped.request.actual_module == ModuleId{"csl.trajectory.original"});
+        CHECK(result.family);
+        CHECK(result.incumbents.empty());
+        return;
+    }
+    REQUIRE(result.termination == Termination::completed);
+    REQUIRE(result.family);
+    const auto &candidate = std::get<CandidateFamily>(result.family->outcome());
+    REQUIRE(candidate.relation.payload->h_relation_for_recording());
+    CHECK(std::holds_alternative<WitnessFeasibilityEvidence>(candidate.feasibility));
     REQUIRE(result.history_optimization);
     CHECK(result.history_optimization->program.value == "strategy-b-history-run");
     REQUIRE(result.history_optimization->provider.actual_module);
