@@ -21,11 +21,12 @@ struct FinitePlanParallelotopeTrace {
 using FinitePlanParallelotopeOutcome =
     std::variant<FinitePlanParallelotopeTrace, Unsupported, OperationStopped>;
 
-// Stagewise outer propagation in a fixed, non-axis-aligned four-state frame.
+// Stagewise outer propagation for 2 to 64 states. The 2D frame is identity
+// and the 4D frame is a single shear block. Other dimensions use successive
+// two-coordinate shear blocks and an identity coordinate if the count is odd.
 // Universal, singleton and H state constraints are supported when every full
 // outer parallelotope is contained; failed containment is inconclusive.
-// The frame and its integer inverse are fixed by this first TwoPoints profile;
-// singular dynamics are supported because the frame is not derived from A.
+// Singular dynamics are supported because the frame is independent of A.
 FinitePlanParallelotopeOutcome finite_plan_parallelotope(const FixedPlanRequest &request,
                                                          const ExecutionContext &context = {});
 

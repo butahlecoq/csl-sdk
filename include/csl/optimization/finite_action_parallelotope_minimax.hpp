@@ -16,6 +16,8 @@ struct FiniteActionParallelotopeMinimaxLimits {
 
 struct ParallelotopeCandidateScore {
     double terminal_frame_box_corner_maximum;
+    // Number of full-dimensional evaluations by the numerical objective.
+    // The large diagonal route evaluates its reconstructed corner once.
     std::size_t corners_evaluated;
     reachability::FinitePlanParallelotopeTrace trace;
 };
@@ -75,10 +77,11 @@ struct FiniteActionParallelotopeMinimaxResult {
 using FiniteActionParallelotopeMinimaxOutcome =
     std::variant<FiniteActionParallelotopeMinimaxResult, Unsupported, OperationStopped>;
 
-// Ranks fixed open-loop plans by numerical maxima over all corners of the
-// terminal fixed-frame box, then replays the selected plan over finite
-// catalogs. Candidate scores are enclosure estimates, not bounds or optimality
-// claims.
+// Ranks fixed open-loop plans by terminal parallelotope scores, then replays
+// the selected plan over finite catalogs. Up to eight states use exhaustive
+// corner evaluation. Larger adjacent-pair frames require a convex diagonal
+// quadratic. They choose maximizing endpoints with exact block comparisons
+// and evaluate one reconstructed corner. Scores are numerical estimates.
 FiniteActionParallelotopeMinimaxOutcome
 finite_action_parallelotope_minimax(const FiniteActionMinimaxRequest &request,
                                     FiniteActionParallelotopeMinimaxLimits limits,
