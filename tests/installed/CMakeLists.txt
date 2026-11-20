@@ -2,6 +2,18 @@ cmake_minimum_required(VERSION 3.31)
 project(CSLInstalledConsumer LANGUAGES CXX)
 find_package(CSL 0.1 CONFIG REQUIRED)
 
+if(CSL_EXPECT_IPOPT AND NOT TARGET CSL::ipopt_convex)
+  message(FATAL_ERROR "The installed Ipopt convex target is missing")
+endif()
+if(TARGET CSL::ipopt_convex)
+  enable_testing()
+  add_executable(installed_ipopt_convex_client ipopt_convex_client.cpp)
+  target_link_libraries(installed_ipopt_convex_client PRIVATE CSL::ipopt_convex)
+  add_test(NAME installed_ipopt_convex_client COMMAND installed_ipopt_convex_client)
+  set_tests_properties(installed_ipopt_convex_client PROPERTIES
+    ENVIRONMENT "OPENBLAS_NUM_THREADS=1;OMP_NUM_THREADS=1;MKL_NUM_THREADS=1")
+endif()
+
 add_executable(installed_discrete_model_client native_discrete_models.cpp)
 target_link_libraries(installed_discrete_model_client PRIVATE CSL::model_catalogue)
 set_target_properties(installed_discrete_model_client PROPERTIES CXX_EXTENSIONS OFF)

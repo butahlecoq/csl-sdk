@@ -13,6 +13,11 @@ if(CSL_ENABLE_CASADI)
   endif()
   list(APPEND casadi_args "-Dcasadi_DIR=${CSL_CASADI_DIR}")
 endif()
+set(ipopt_args "-DCSL_EXPECT_IPOPT=${CSL_EXPECT_IPOPT}")
+if(CSL_EXPECT_IPOPT)
+  list(APPEND ipopt_args "-DIpopt_INCLUDE_DIR=${CSL_IPOPT_INCLUDE_DIR}"
+    "-DIpopt_LIBRARY=${CSL_IPOPT_LIBRARY}")
+endif()
 if(NOT CSL_BUILD_PARALLELISM MATCHES "^[1-9][0-9]*$")
   message(FATAL_ERROR "CSL_BUILD_PARALLELISM must be a positive integer")
 endif()
@@ -148,7 +153,7 @@ if(CSL_TOOLSET)
 endif()
 execute_process(COMMAND "${CMAKE_COMMAND}" -S "${work}/source" -B "${work}/build"
   ${generator_args} "-DCMAKE_PREFIX_PATH=${prefix}" "-DCMAKE_BUILD_TYPE=${CSL_CONFIG}"
-  ${casadi_args}
+  ${casadi_args} ${ipopt_args}
   "-DCMAKE_CXX_COMPILER=${CSL_CXX_COMPILER}"
   "-DCMAKE_CXX_COMPILER_LAUNCHER=${CSL_CXX_COMPILER_LAUNCHER}"
   "-DCMAKE_CXX_FLAGS=${CSL_CXX_FLAGS}"
@@ -196,7 +201,7 @@ file(COPY "${CSL_SOURCE_DIR}/examples/scenarios/npoa-2017-programmed-fuel-v1.jso
   DESTINATION "${example_source}/scenarios")
 execute_process(COMMAND "${CMAKE_COMMAND}" -S "${example_source}" -B "${work}/examples-build"
   ${generator_args} "-DCMAKE_PREFIX_PATH=${prefix}" "-DCMAKE_BUILD_TYPE=${CSL_CONFIG}"
-  ${casadi_args}
+  ${casadi_args} ${ipopt_args}
   "-DCMAKE_CXX_COMPILER=${CSL_CXX_COMPILER}" "-DCMAKE_CXX_FLAGS=${CSL_CXX_FLAGS}"
   "-DCMAKE_CXX_COMPILER_LAUNCHER=${CSL_CXX_COMPILER_LAUNCHER}"
   "-DCMAKE_EXE_LINKER_FLAGS=${CSL_EXE_LINKER_FLAGS}"
