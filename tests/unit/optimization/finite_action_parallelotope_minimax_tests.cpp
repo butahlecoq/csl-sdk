@@ -75,7 +75,8 @@ TEST_CASE("large diagonal parallelotope scores agree with a physical corner orac
         // propagation. A regular pair's maximum is 4 at (2,1).
         // The action +1 shifts the physical pair, giving max 12 at (3,2).
         // The decreasing first pair contributes 0 or -14 at its lower corner.
-        const double analytic = 1.25 + static_cast<double>(n / 2 - 1) * (shifted ? 12 : 4) +
+        const auto regular_pairs = n / 2 - 1;
+        const double analytic = 1.25 + static_cast<double>(regular_pairs) * (shifted ? 12 : 4) +
                                 (shifted ? -14 : 0) + (n % 2 != 0 ? (shifted ? 6 : 2) : 0);
         CHECK(attempt.score.terminal_frame_box_corner_maximum ==
               doctest::Approx(analytic).epsilon(1e-12));
