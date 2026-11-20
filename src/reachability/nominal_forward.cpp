@@ -185,10 +185,11 @@ sets::SetData relabel(const sets::SetData &data, SetId id, std::vector<std::stri
 }
 
 namespace {
-NominalForwardOutcome nominal_forward_impl(
-    const problem::ResolvedProblem &resolved, RequestId request,
-    const registry::PreparedProvider<registry::GeometryPort> &provider,
-    const ForwardDependencies *vertex_dependencies, const ExecutionContext &context) {
+NominalForwardOutcome
+nominal_forward_impl(const problem::ResolvedProblem &resolved, RequestId request,
+                     const registry::PreparedProvider<registry::GeometryPort> &provider,
+                     const ForwardDependencies *vertex_dependencies,
+                     const ExecutionContext &context) {
     ForwardTube tube{resolved.identity(), std::move(request), {}};
     StageIndex stage{0};
     std::optional<GeometryReference> active;
@@ -695,10 +696,10 @@ NominalForwardOutcome nominal_forward(const problem::ResolvedProblem &resolved, 
                                 &dependencies, context);
 }
 
-NominalForwardOutcome nominal_forward_projected(
-    const problem::ResolvedProblem &resolved, RequestId request,
-    const registry::PreparedProvider<registry::GeometryPort> &projection,
-    const ExecutionContext &context) {
+NominalForwardOutcome
+nominal_forward_projected(const problem::ResolvedProblem &resolved, RequestId request,
+                          const registry::PreparedProvider<registry::GeometryPort> &projection,
+                          const ExecutionContext &context) {
     return nominal_forward_impl(resolved, std::move(request), projection, nullptr, context);
 }
 } // namespace csl::reachability

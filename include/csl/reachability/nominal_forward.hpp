@@ -71,11 +71,11 @@ struct ForwardDependencies {
 NominalForwardOutcome nominal_forward(const problem::ResolvedProblem &, RequestId,
                                       const ForwardDependencies &, const ExecutionContext &);
 
-
 // Project each joint transition factor directly. The equivalent numerical H
 // projection provider receives [x,u,y] and eliminates [x,u].
-NominalForwardOutcome nominal_forward_projected(
-    const problem::ResolvedProblem &, RequestId,
-    const registry::PreparedProvider<registry::GeometryPort> &, const ExecutionContext &);
+NominalForwardOutcome
+nominal_forward_projected(const problem::ResolvedProblem &, RequestId,
+                          const registry::PreparedProvider<registry::GeometryPort> &,
+                          const ExecutionContext &);
 
 } // namespace csl::reachability
