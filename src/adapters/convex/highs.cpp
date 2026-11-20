@@ -10,6 +10,40 @@ namespace csl::adapters::convex {
 namespace {
 using namespace optimization;
 constexpr const char *version = "1.0.0+highs.1.11.0";
+constexpr double removal_threshold = 1e-12;
+constexpr int max_row_power = 20;
+constexpr double max_scaled_row_magnitude = 0x1p20;
+bool below_matrix_threshold(double value) {
+    return value != 0 && std::abs(value) <= removal_threshold;
+}
+int row_power_at(std::span<const int> powers, std::size_t row) {
+    return powers.empty() ? 0 : powers[row];
+}
+double apply_row_power(double value, int power) {
+    return power == 0 ? value : std::scalbn(value, power);
+}
+std::optional<int> bounded_row_power(std::span<const double> entries, const Interval &interval) {
+    double minimum = std::numeric_limits<double>::infinity();
+    for (double value : entries)
+        if (value != 0)
+            minimum = std::min(minimum, std::abs(value));
+    if (minimum > removal_threshold)
+        return 0;
+    int power = 1;
+    while (power <= max_row_power && std::scalbn(minimum, power) <= removal_threshold)
+        ++power;
+    if (power > max_row_power)
+        return {};
+    const auto fits = [power](double value) {
+        if (std::abs(value) > std::scalbn(max_scaled_row_magnitude, -power))
+            return false;
+        return std::scalbn(std::scalbn(value, power), -power) == value;
+    };
+    if (!std::all_of(entries.begin(), entries.end(), fits) ||
+        (interval.lower && !fits(*interval.lower)) || (interval.upper && !fits(*interval.upper)))
+        return {};
+    return power;
+}
 static_assert(std::numeric_limits<HighsInt>::is_signed &&
               std::numeric_limits<HighsInt>::digits == 31);
 using Wide = std::uintmax_t;
@@ -37,9 +71,9 @@ template <class T> bool extent(Wide count) {
            *bytes <= std::numeric_limits<std::size_t>::max() &&
            *bytes <= static_cast<Wide>(std::numeric_limits<std::ptrdiff_t>::max());
 }
-// Pure representability admission. No native object or size-proportional buffer
-// exists here; the declared cap applies to linear objectives as well as QPs.
-Diagnostics admission(const ConvexProgram &p) {
+// Typed admission creates no native object. Only solve preparation requests
+// storage for a successful scaling plan.
+Diagnostics admission(const ConvexProgram &p, bool scale_rows, std::vector<int> *plan = nullptr) {
     const auto &q = p.quadratic_program();
     const Wide n = q.variables().size(), m = q.rows().size();
     if (n > 4096)
@@ -91,10 +125,22 @@ Diagnostics admission(const ConvexProgram &p) {
             !extent<std::byte>(*transpose_bytes))
             return unsupported("highs.convex.capacity", "transient storage byte sum exceeded");
     }
-    for (double value : csr.values)
-        if (value != 0 && std::abs(value) <= 1e-12)
+    if (std::any_of(csr.values.begin(), csr.values.end(), below_matrix_threshold)) {
+        if (!scale_rows)
             return unsupported("highs.convex.matrix",
                                "nonzero coefficient at or below native removal threshold 1e-12");
+        for (std::size_t row = 0; row < csr.rows; ++row) {
+            const auto start = csr.row_offsets[row];
+            const auto power = bounded_row_power(
+                csr.values.subspan(start, csr.row_offsets[row + 1] - start), q.rows()[row]);
+            if (!power)
+                return unsupported(
+                    "highs.convex.matrix",
+                    "row exceeds exact scaling limits (power and scaled magnitudes)");
+            if (plan)
+                plan->push_back(*power);
+        }
+    }
     // Linear objectives have an owning O(n) empty CSR Hessian. Do not scan n^2.
     if (std::holds_alternative<QuadraticCoefficients>(q.objective().coefficients()))
         for (std::size_t i = 0; i < n; ++i)
@@ -169,7 +215,7 @@ void configure(Highs &h, const ExecutionContext &c, const HighsConvexOptions &op
         throw SetupError("native audited profile readback differs");
     h.zeroAllClocks();
 }
-HighsModel translate(const ConvexProgram &p) {
+HighsModel translate(const ConvexProgram &p, std::span<const int> powers) {
     const auto &q = p.quadratic_program();
     HighsModel model;
     auto &lp = model.lp_;
@@ -208,9 +254,11 @@ HighsModel translate(const ConvexProgram &p) {
         lp.col_lower_.push_back(b.lower.value_or(-kHighsInf));
         lp.col_upper_.push_back(b.upper.value_or(kHighsInf));
     }
-    for (const auto &b : q.rows()) {
-        lp.row_lower_.push_back(b.lower.value_or(-kHighsInf));
-        lp.row_upper_.push_back(b.upper.value_or(kHighsInf));
+    for (std::size_t i = 0; i < q.rows().size(); ++i) {
+        const auto &b = q.rows()[i];
+        const int power = row_power_at(powers, i);
+        lp.row_lower_.push_back(apply_row_power(b.lower.value_or(-kHighsInf), power));
+        lp.row_upper_.push_back(apply_row_power(b.upper.value_or(kHighsInf), power));
     }
     const auto csr = std::get<numeric::CsrInput>(q.constraints().descriptor());
     const bool private_free_row =
@@ -244,7 +292,7 @@ HighsModel translate(const ConvexProgram &p) {
         for (auto k = csr.row_offsets[i]; k < csr.row_offsets[i + 1]; ++k) {
             const auto slot = static_cast<std::size_t>(next[csr.column_indices[k]]++);
             matrix.index_[slot] = static_cast<HighsInt>(i);
-            matrix.value_[slot] = csr.values[k];
+            matrix.value_[slot] = apply_row_power(csr.values[k], row_power_at(powers, i));
         }
     if (private_free_row) {
         const auto slot = static_cast<std::size_t>(next[0]++);
@@ -302,7 +350,8 @@ std::pair<HighsBasis, std::size_t> qp_start_basis(const HighsLp &lp, HighsBasis 
     }
     return {std::move(basis), inactive_free_rows};
 }
-bool feasible_start(const Highs &h, const HighsLp &lp, const ConvexProgram &p, double tolerance) {
+bool feasible_start(const Highs &h, const HighsLp &lp, const ConvexProgram &p, double tolerance,
+                    std::span<const int> powers) {
     const auto &s = h.getSolution();
     const auto &b = h.getBasis();
     const auto n = static_cast<std::size_t>(lp.num_col_), m = static_cast<std::size_t>(lp.num_row_);
@@ -327,7 +376,8 @@ bool feasible_start(const Highs &h, const HighsLp &lp, const ConvexProgram &p, d
         double activity = 0;
         if (i < csr.rows)
             for (auto k = csr.row_offsets[i]; k < csr.row_offsets[i + 1]; ++k)
-                activity += csr.values[k] * s.col_value[csr.column_indices[k]];
+                activity += apply_row_power(csr.values[k], row_power_at(powers, i)) *
+                            s.col_value[csr.column_indices[k]];
         else
             activity = s.col_value[0]; // Private free row, separate from every authored activity.
         if (!std::isfinite(activity) ||
@@ -377,15 +427,17 @@ void classify(ProgramResult &result, HighsStatus api, HighsModelStatus status) {
     }
 }
 bool split(std::span<const double> dual, std::span<const Interval> bounds, Vector &lower,
-           Vector &upper) {
+           Vector &upper, std::span<const int> powers = {}) {
     if (dual.size() != bounds.size())
         return false;
     for (std::size_t i = 0; i < bounds.size(); ++i) {
-        if (!std::isfinite(dual[i]) || (dual[i] > 0 && !bounds[i].lower) ||
-            (dual[i] < 0 && !bounds[i].upper))
+        // Scaling the row by 2^s scales its contribution to stationarity by 2^s.
+        const double value = apply_row_power(dual[i], row_power_at(powers, i));
+        if (!std::isfinite(value) || (value > 0 && !bounds[i].lower) ||
+            (value < 0 && !bounds[i].upper))
             return false;
-        lower.push_back(std::max(dual[i], 0.0));
-        upper.push_back(std::max(-dual[i], 0.0));
+        lower.push_back(std::max(value, 0.0));
+        upper.push_back(std::max(-value, 0.0));
     }
     return true;
 }
@@ -422,7 +474,7 @@ void append_attempt_residuals(std::ostringstream &raw, const char *attempt,
 }
 void candidate(ProgramResult &result, const ConvexProgram &p, const ExecutionContext &c,
                const HighsSolution &s, std::ostringstream &raw, bool allow_dual,
-               bool private_free_row = false) {
+               bool private_free_row = false, std::span<const int> powers = {}) {
     const auto &q = p.quadratic_program();
     if (!s.value_valid || !finite(s.col_value, q.variables().size()))
         return;
@@ -468,7 +520,7 @@ void candidate(ProgramResult &result, const ConvexProgram &p, const ExecutionCon
     } else {
         if (!allow_dual || !s.dual_valid || s.row_dual.size() < q.rows().size() ||
             !split(std::span<const double>(s.row_dual).first(q.rows().size()), q.rows(),
-                   multipliers.row_lower, multipliers.row_upper) ||
+                   multipliers.row_lower, multipliers.row_upper, powers) ||
             !split(s.col_dual, q.variables(), multipliers.variable_lower,
                    multipliers.variable_upper)) {
             raw << "\ndual.unavailable=invalid native multiplier mapping";
@@ -500,9 +552,11 @@ void candidate(ProgramResult &result, const ConvexProgram &p, const ExecutionCon
 }
 class Workspace final : public ConvexWorkspace {
     HighsConvexOptions options_;
+    bool scale_rows_;
     std::unique_ptr<Highs> feasibility_, solver_;
     ProgramOutcome solve_native(const ConvexProgram &p, const ExecutionContext &c) {
-        if (auto d = admission(p); !d.empty())
+        std::vector<int> powers;
+        if (auto d = admission(p, scale_rows_, &powers); !d.empty())
             return Unsupported{std::move(d)};
         if (auto d = admission(c); !d.empty())
             return Unsupported{std::move(d)};
@@ -529,6 +583,18 @@ class Workspace final : public ConvexWorkspace {
             if (capture.stop) {
                 result.termination = *capture.stop;
                 result.outcome.value = MathematicalOutcome::undetermined;
+            }
+            if (result.outcome.value == MathematicalOutcome::optimal &&
+                !passes(result, c.numerical)) {
+                result.termination = Termination::numerical_failure;
+                result.outcome.value = MathematicalOutcome::undetermined;
+                raw << "\noptimality.withheld=original-space checks unavailable or failing";
+            }
+            if (!powers.empty() && (result.outcome.value == MathematicalOutcome::infeasible ||
+                                    result.outcome.value == MathematicalOutcome::unbounded)) {
+                result.termination = Termination::numerical_failure;
+                result.outcome.value = MathematicalOutcome::undetermined;
+                raw << "\nclassification.withheld=row scaling has no original-space certificate";
             }
             auto measure = [&](const char *name, const ResidualMeasure &value) {
                 raw << "\ncheck." << name << ".violation=" << value.violation << "\ncheck." << name
@@ -572,22 +638,24 @@ class Workspace final : public ConvexWorkspace {
                 s.row_value.assign(q.rows().size(), 0);
                 s.row_dual.assign(q.rows().size(), 0);
                 candidate(result, p, c, s, raw, true);
-                if (!passes(result, c.numerical)) {
-                    result.termination = Termination::numerical_failure;
-                    result.outcome.value = MathematicalOutcome::undetermined;
-                }
             }
             raw << "\nnative_run=false\nwrapper.decision=constant_rows\nnative.info=unavailable";
             return finish();
         }
         // Admission precedes model conversion and both lazy native constructors.
-        auto model = translate(p);
+        auto model = translate(p, powers);
         const bool qp = !model.hessian_.value_.empty();
         const bool private_free_row =
             static_cast<std::size_t>(model.lp_.num_row_) != q.rows().size();
         raw << "\nmodel.private_free_row=" << (private_free_row ? "true" : "false")
             << "\nmodel.original_rows=" << q.rows().size()
             << "\nmodel.native_rows=" << model.lp_.num_row_;
+        if (!powers.empty()) {
+            raw << "\nmodel.row_scaling=";
+            for (std::size_t i = 0; i < powers.size(); ++i)
+                if (powers[i] > 0)
+                    raw << i << ":" << powers[i] << ",";
+        }
         try {
             if (qp) {
                 if (!feasibility_)
@@ -642,7 +710,7 @@ class Workspace final : public ConvexWorkspace {
                 double tolerance = 0;
                 require(h.getOptionValue("use_warm_start", warm));
                 require(h.getOptionValue("dual_feasibility_tolerance", tolerance));
-                if (!warm || !feasible_start(h, model.lp_, p, tolerance)) {
+                if (!warm || !feasible_start(h, model.lp_, p, tolerance, powers)) {
                     raw << "\nqp_run=false\nstart.valid=false";
                     return finish();
                 }
@@ -650,7 +718,7 @@ class Workspace final : public ConvexWorkspace {
                     raw << "\nphase.qp.basis.inactive_free_rows=" << inactive_free_rows;
                     set_hint(h, primal_hint(model.lp_, *hint), raw, "phase.qp");
                     require(h.setBasis(basis));
-                    const bool hint_feasible = feasible_start(h, model.lp_, p, tolerance);
+                    const bool hint_feasible = feasible_start(h, model.lp_, p, tolerance, powers);
                     raw << "\nphase.qp.primal_start.feasible="
                         << (hint_feasible ? "true" : "false");
                     if (!hint_feasible) {
@@ -679,7 +747,7 @@ class Workspace final : public ConvexWorkspace {
                     raw << "\nphase.qp.actual_start.row_duals=";
                     for (const double value : actual.row_dual)
                         raw << value << ",";
-                    if (!feasible_start(h, model.lp_, p, tolerance))
+                    if (!feasible_start(h, model.lp_, p, tolerance, powers))
                         throw SetupError("post-basis QP start invalid");
                 }
                 raw << "\nstart.valid=true\nstart.default_fallback=false";
@@ -698,7 +766,7 @@ class Workspace final : public ConvexWorkspace {
                     raw << "\nphase.qp.info=unavailable";
                 classify(result, api, qp_status);
                 if (api != HighsStatus::kError)
-                    candidate(result, p, c, h.getSolution(), raw, true, private_free_row);
+                    candidate(result, p, c, h.getSolution(), raw, true, private_free_row, powers);
                 if (std::holds_alternative<optimization::QuadraticCoefficients>(
                         p.original_objective().coefficients()) &&
                     result.outcome.value == MathematicalOutcome::optimal &&
@@ -733,7 +801,8 @@ class Workspace final : public ConvexWorkspace {
                         << "\nphase.qp.retry.model_status=" << static_cast<int>(retry_status);
                     classify(result, retry_api, retry_status);
                     if (retry_api != HighsStatus::kError)
-                        candidate(result, p, c, retry.getSolution(), raw, true, private_free_row);
+                        candidate(result, p, c, retry.getSolution(), raw, true, private_free_row,
+                                  powers);
                 }
             } else {
                 if (!solver_)
@@ -759,13 +828,7 @@ class Workspace final : public ConvexWorkspace {
                     raw << "\nphase.linear.info=unavailable";
                 classify(result, api, status);
                 if (api != HighsStatus::kError)
-                    candidate(result, p, c, h.getSolution(), raw, true);
-            }
-            if (result.outcome.value == MathematicalOutcome::optimal &&
-                !passes(result, c.numerical)) {
-                result.termination = Termination::numerical_failure;
-                result.outcome.value = MathematicalOutcome::undetermined;
-                raw << "\noptimality.withheld=original-space checks unavailable or failing";
+                    candidate(result, p, c, h.getSolution(), raw, true, false, powers);
             }
         } catch (const SetupError &e) {
             feasibility_.reset();
@@ -785,19 +848,20 @@ class Workspace final : public ConvexWorkspace {
     }
 
   public:
-    explicit Workspace(HighsConvexOptions options) : options_(options) {}
+    Workspace(HighsConvexOptions options, bool scale_rows)
+        : options_(options), scale_rows_(scale_rows) {}
 };
-}
-HighsConvexRegistrationResult make_highs_registration(HighsConvexOptions options) {
+HighsConvexRegistrationResult register_highs(HighsConvexOptions options, bool scale_rows) {
     for (auto cap : {options.feasibility_iteration_limit, options.qp_iteration_limit})
         if (cap && *cap > static_cast<std::size_t>(kHighsIInf))
             return unsupported("highs.convex.iteration_limit", "native integer width exceeded");
     return registry::Registration<registry::ConvexPort>{
-        {{"csl.convex.highs"}, version},
-        [](const ConvexProgram &p, const registry::Requirements &request) -> registry::Capability {
+        {{scale_rows ? "csl.convex.highs.row-scaled" : "csl.convex.highs"}, version},
+        [scale_rows](const ConvexProgram &p,
+                     const registry::Requirements &request) -> registry::Capability {
             if (request.scalar != registry::Scalar::binary64)
                 return unsupported("scalar", "binary64 required");
-            if (auto d = admission(p); !d.empty())
+            if (auto d = admission(p, scale_rows); !d.empty())
                 return d;
             return registry::Offer{{{"csl.program-result.v1"},
                                     Assurance::numerical,
@@ -805,9 +869,11 @@ HighsConvexRegistrationResult make_highs_registration(HighsConvexOptions options
                                     {},
                                     registry::Completeness::unestablished}};
         },
-        [options](const ConvexProgram &) { return std::make_unique<Workspace>(options); },
+        [options, scale_rows](const ConvexProgram &) {
+            return std::make_unique<Workspace>(options, scale_rows);
+        },
         {},
-        [](const registry::RequestEnvelope &envelope, const registry::Requirements &) {
+        [scale_rows](const registry::RequestEnvelope &envelope, const registry::Requirements &) {
             if (envelope.operation != "hybrid.convex-optimization")
                 return registry::AdmissionDeclaration{
                     registry::AdmissionStatus::unknown, {}, false};
@@ -825,8 +891,9 @@ HighsConvexRegistrationResult make_highs_registration(HighsConvexOptions options
                         "highs.convex.admission.coefficient_scale",
                         "Envelope does not bound matrix coefficients against HiGHS' 1e-12 removal threshold"),
                     false};
-            if (!std::isfinite(*envelope.minimum_nonzero_matrix_coefficient_magnitude) ||
-                *envelope.minimum_nonzero_matrix_coefficient_magnitude <= 1e-12)
+            const double minimum = *envelope.minimum_nonzero_matrix_coefficient_magnitude;
+            if (!std::isfinite(minimum) || minimum < 0 ||
+                (!scale_rows && minimum <= removal_threshold))
                 return registry::AdmissionDeclaration{
                     registry::AdmissionStatus::unsupported,
                     unsupported(
@@ -845,7 +912,21 @@ HighsConvexRegistrationResult make_highs_registration(HighsConvexOptions options
                         "highs.convex.admission.capacity",
                         "Hybrid convex envelope exceeds HiGHS variable, row, or matrix-entry limits"),
                     false};
+            if (minimum <= removal_threshold)
+                return registry::AdmissionDeclaration{
+                    registry::AdmissionStatus::conditional,
+                    unsupported(
+                        "highs.convex.admission.coefficient_scale",
+                        "Exact row scaling requires inspecting the program rows and bounds"),
+                    false};
             return registry::AdmissionDeclaration{registry::AdmissionStatus::supported, {}, true};
         }};
+}
+}
+HighsConvexRegistrationResult make_highs_registration(HighsConvexOptions options) {
+    return register_highs(options, false);
+}
+HighsConvexRegistrationResult make_highs_row_scaled_registration(HighsConvexOptions options) {
+    return register_highs(options, true);
 }
 }
