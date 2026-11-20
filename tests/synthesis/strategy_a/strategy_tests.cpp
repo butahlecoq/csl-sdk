@@ -39,6 +39,17 @@ template<class T,class V> T alternative(V value) {
     REQUIRE(std::holds_alternative<T>(value));return std::get<T>(std::move(value));
 }
 class ZeroHistoryOptimizer final : public optimization::HistoryOptimizerWorkspace {
+    std::stop_source *stop_after_history_;
+
+public:
+    explicit ZeroHistoryOptimizer(std::stop_source *stop_after_history)
+        : stop_after_history_(stop_after_history) {}
+    ~ZeroHistoryOptimizer() override {
+        if (stop_after_history_)
+            stop_after_history_->request_stop();
+    }
+
+private:
     optimization::RawHistorySolveOutcome
     solve_candidate(const optimization::HistoryOptimizationRequest &request,
                     const ExecutionContext &) override {
@@ -88,15 +99,15 @@ class ZeroHistoryOptimizer final : public optimization::HistoryOptimizerWorkspac
             "deterministic zero-history integration fixture", std::move(witnesses)};
     }
 };
-PreparedProvider<HistoryOptimizerPort> zero_history_optimizer() {
+PreparedProvider<HistoryOptimizerPort> zero_history_optimizer(std::stop_source *stop_after_history = nullptr) {
     Registry<HistoryOptimizerPort> registry;
     REQUIRE_FALSE(registry.add(
         {{{"test.zero-history-optimizer"}, "1"},
          [](const optimization::HistoryOptimizationRequest &,
             const Requirements &requirements) -> Capability { return Offer{requirements.output}; },
-         [](const optimization::HistoryOptimizationRequest &)
+         [stop_after_history](const optimization::HistoryOptimizationRequest &)
              -> std::unique_ptr<optimization::HistoryOptimizerWorkspace> {
-             return std::make_unique<ZeroHistoryOptimizer>();
+             return std::make_unique<ZeroHistoryOptimizer>(stop_after_history);
          }}));
     Requirements requirements;
     requirements.output.representation = {"csl.history-optimization-result.v1"};
@@ -781,7 +792,7 @@ TEST_CASE("Strategy A executes the real CasADi-IPOPT history optimizer with type
     CHECK(result.history_optimization->provider.actual_module->value == identity.id.value);
 }
 #endif
-TEST_CASE("Strategy A invokes the prepared whole-history optimizer before terminal optimization") {
+TEST_CASE("Strategy A retains the feasible preimage for a source-cost request") {
     auto query = request(integrator());
     query.configuration.history_optimizer = {"test.zero-history-optimizer"};
     query.history_optimization =
@@ -792,10 +803,16 @@ TEST_CASE("Strategy A invokes the prepared whole-history optimizer before termin
                                                              "state",
                                                              typed_history_memberships(),
                                                              optimization::ColdStart{}});
+    std::stop_source verifier_stop;
+    bool cancel_during_verification = false;
+    SUBCASE("normal completion") {}
+    SUBCASE("cancel after verified history") { cancel_during_verification = true; }
+    auto optimizer = zero_history_optimizer(cancel_during_verification ? &verifier_stop : nullptr);
     auto prepared = take(admit(query, false, {}, false, false, false, nullptr, nullptr, false,
-                               false, false, false, zero_history_optimizer()));
+                               false, false, false, std::move(optimizer)));
     auto workspace = prepared.create();
     ExecutionContext context;
+    context.cancellation = verifier_stop.get_token();
     context.resources = std::make_shared<const ResourcePolicy>(ResourcePolicy{1, 1, 1, {}});
     auto result = take(workspace->run(context));
     INFO("termination=" << static_cast<int>(result.termination) << " stop=" << result.stop.index()
@@ -806,6 +823,23 @@ TEST_CASE("Strategy A invokes the prepared whole-history optimizer before termin
         for (const auto &diagnostic : failure->diagnostics)
             diagnostic_text += diagnostic.field + ": " + diagnostic.explanation + "; ";
     INFO("diagnostics=" << diagnostic_text);
+    if (cancel_during_verification) {
+        REQUIRE(result.history_optimization);
+        CHECK(result.history_optimization->result);
+        CHECK(result.termination == Termination::cancelled);
+        REQUIRE(std::holds_alternative<ScopedOperationStopped>(result.stop));
+        const auto &stopped = std::get<ScopedOperationStopped>(result.stop);
+        CHECK(stopped.stop.reason == StopReason::cancelled);
+        CHECK(stopped.request.actual_module == ModuleId{"csl.trajectory.original"});
+        CHECK(result.family);
+        CHECK(result.incumbents.empty());
+        return;
+    }
+    REQUIRE(result.termination == Termination::completed);
+    REQUIRE(result.family);
+    const auto &candidate = payload(result);
+    CHECK(candidate.target == synthesis::strategy_a::PreimageTarget::forward_terminal_slice);
+    CHECK_FALSE(candidate.terminal);
     REQUIRE(result.history_optimization);
     CHECK(result.history_optimization->program.value == "strategy-a-history-run");
     REQUIRE(result.history_optimization->provider.actual_module);
