@@ -6,6 +6,7 @@
 #include <csl/reachability/feedback_geometry.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -93,6 +94,83 @@ bool axis_membership_contains(const csl::reachability::FeedbackMembership& membe
         else { const auto x=(point[j]-center[j])/d; norm+=x*x; if(!ball && std::abs(x)>1+1e-10) return false; }
     }
     return !ball || norm<=1+1e-10;
+}
+
+bool orbit_midpoint_survives_certified_projection(
+    const csl::reachability::FeedbackGeometryDependencies &dependencies) {
+    using namespace csl;
+    using namespace csl::reachability;
+    // Original orbit updates 18–20 and observation, recorded in SDK issue #11.
+    const LinearStage predictor{
+        {4,
+         4,
+         {1.0174163705059924, 99.80640977215867, -0.0, 75391.24366355607, 0.00034798998485238193,
+          0.9941945431646704, 0.0, 1506.3642411291376, -1.788875721149373e-07,
+          -0.0015385968094603075, 1.0, 99.2256390886345, -5.364548044963179e-09,
+          -3.074212736998153e-05, 0.0, 0.9767781726586771}},
+        {4,
+         2,
+         {0.09990318613348546, 0.007182901216686848, 0.0019961281954431745, 0.0002154035533244459,
+          -1.0261287452409472e-06, 1.423039207627737e-05, -3.077193618920475e-08,
+          2.8350182596752727e-07}},
+        {4, 0, {}},
+        {-203.19098923657785, -4.059883156611123, 0.0020870216746742276, 6.258639385790105e-05}};
+    // Zero controls are the box midpoints. Independently propagate in exact
+    // rational arithmetic on the source coefficients, then round each state.
+    const std::array<Vector, 3> midpoint{
+        {{6970.928299015818, -0.033916813761924534, 1.9432507174416318, 0.0010844826169594116},
+         {6967.5209576171965, -0.034164000279400766, 2.051751391727261, 0.0010855321379622043},
+         {6964.108726593135, -0.0340145115389917, 2.1603571952565472, 0.001086583165055522}}};
+    const auto model = std::make_shared<const SystemModel>(SystemModel{
+        {{4, 2, 0}, TimeDomain::discrete, std::vector<LinearStage>{predictor, predictor}}, {}});
+    const auto controls = box("orbit-actions", {-0.5, -0.5}, {0.5, 0.5});
+    const auto universal = take(sets::make_universal({{"orbit-state-domain"}, 4, {}})).as_handle();
+    const Problem source{{"orbit-suffix-18"},
+                         model,
+                         {1800, 1900, 2000},
+                         KnownInitial{midpoint.front()},
+                         ContinuousDomain{{controls, controls}},
+                         {universal, universal, universal},
+                         {},
+                         {},
+                         InformationPattern::nominal_open_loop,
+                         QuadraticTerminal{{4, 4, Vector(16, 0)}, Vector(4, 0), 0}};
+    const auto resolved = take(
+        problem::resolve(source, {problem::UncertaintyStructure::stage_product_uncoupled, {}, {}}));
+    const auto outcome = feedback_geometry(resolved, {"orbit-suffix-18-certified"}, universal,
+                                           FeedbackFamily::polytope, {{0, 0}}, dependencies,
+                                           FeedbackPolytopeHistory::certified_whole_history, {});
+    const auto *geometry = std::get_if<FeedbackGeometry>(&outcome);
+    if (!geometry || geometry->stages.size() != midpoint.size())
+        return false;
+    for (std::size_t k = 0; k < midpoint.size(); ++k) {
+        const auto &stage = geometry->stages[k];
+        for (const auto *set : {&stage.forward, &stage.backward, &stage.intersection}) {
+            if (!*set || (*set)->assurance != Assurance::validated ||
+                (*set)->relation != SetRelation::outer ||
+                (*set)->strict_source_domain.size() != 1 ||
+                (*set)->strict_source_domain.front().coordinate != 0 ||
+                (*set)->strict_source_domain.front().lower_bound != 0)
+                return false;
+            const auto *member = std::get_if<FeedbackHMembership>(&(*set)->membership);
+            if (!member)
+                return false;
+            const auto data = take(sets::from_handle(member->set));
+            const auto representation = data.representation();
+            const auto *h = std::get_if<sets::HRepresentation>(&representation);
+            if (!h || h->inequalities.rows() == 0 || h->inequalities.rows() > 8 ||
+                !contains(*h, midpoint[k]))
+                return false;
+            for (std::size_t row = 0; row < h->inequalities.rows(); ++row) {
+                bool zero_normal = true;
+                for (std::size_t column = 0; column < h->inequalities.cols(); ++column)
+                    zero_normal &= (h->inequalities(row, column) == 0);
+                if (zero_normal && h->upper_bounds[row] < 0)
+                    return false;
+            }
+        }
+    }
+    return true;
 }
 }
 
@@ -285,6 +363,11 @@ int main() {
         }
         const reachability::FeedbackGeometryDependencies certified_deps{
             {forward, intersection}, selected(lp,"csl.program-result.v1"), 1000};
+        if (!orbit_midpoint_survives_certified_projection(certified_deps)) {
+            std::cerr
+                << "Certified orbit projection lost the original midpoint history or its bounded outer result.\n";
+            return 37;
+        }
         const auto certified_mode = reachability::FeedbackPolytopeHistory::certified_whole_history;
         const auto certified = reachability::feedback_geometry(resolved,{"exact-history"},
             box("narrow-terminal", {0.25,0.375}, {0.375,0.5}),
