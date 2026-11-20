@@ -469,15 +469,21 @@ class StrategyAExecutionRunner final : public SynthesisWorkspace,
                     const auto checked = verification::verify_trajectory(problem, query, context);
                     if (checked.termination != Termination::completed) {
                         const StopReason reason =
-                            checked.termination == Termination::deadline_expired
+                            checked.termination == Termination::cancelled ? StopReason::cancelled
+                            : checked.termination == Termination::deadline_expired
                                 ? StopReason::deadline_expired
                             : checked.termination == Termination::resource_limit
                                 ? StopReason::resource_limit
                                 : StopReason::numerical_failure;
-                        stop(
-                            result, provenance({"strategy-a/history-optimizer"}, call.provider),
-                            {reason,
-                             "Independent source trajectory check of whole-history optimizer output stopped."});
+                        const auto &verifier = checked.verifier;
+                        stop(result,
+                             {{"strategy-a/history-trajectory-verification"},
+                              "verification",
+                              verifier.id,
+                              verifier.version,
+                              verifier.id,
+                              verifier.version},
+                             {reason, "Independent source trajectory verification stopped."});
                         return result;
                     }
                     if (checked.bindings != verification::CheckStatus::numerical_pass ||
@@ -508,6 +514,7 @@ class StrategyAExecutionRunner final : public SynthesisWorkspace,
                          std::get<OperationStopped>(objective));
                     return result;
                 }
+                return result;
             }
             if (auto interrupted = interruption(context)) {
                 stop(result, local({"strategy-a/terminal"}), *interrupted);
