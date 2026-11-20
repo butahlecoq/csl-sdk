@@ -90,6 +90,15 @@ target_link_libraries(my_controller PRIVATE CSL::controllers CSL::model_catalogu
 ```
 
 The [example CMake project](examples/CMakeLists.txt) uses the installed targets.
+
+For the optional direct convex provider, configure the SDK with
+`-DCSL_ENABLE_IPOPT=ON -DIpopt_ROOT=/path/to/ipopt`. The root must supply
+Ipopt 3.14.19 headers and a linkable native library. Link consumers to
+`CSL::ipopt_convex` and add `make_ipopt_registration()` to the convex registry
+to select `csl.convex.ipopt`. The provider accepts numerical convex quadratics,
+checks accepted solutions in the original program units, and uses one caller
+worker. Configure the thread limit of the supplied BLAS for that worker.
+
 The [native source modules](src), [public headers](include/csl), [schemas](schemas),
 and [tests](tests) accompany the SDK. The [research repository](https://github.com/butahlecoq/controlled-systems-lab) owns experiment drivers, comparison datasets, teaching pages and historical evidence.
 
