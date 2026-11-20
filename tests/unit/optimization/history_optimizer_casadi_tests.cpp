@@ -213,11 +213,18 @@ TEST_CASE("CasADi returns a witness for a lifted H view of its original history"
     using namespace optimization;
     auto request = integrator_request(2.0);
     request.domain.state_frame = "x-y";
-    HistoryLiftedHMembership lifted{request.domain.original.relation.metadata()->id,
-                                    {{0, 2}}, {{0, 4}}};
-    request.domain.memberships = {{{1},
-        {{"prefix"}, {"prefix"}, HistorySetFamily::polytope, SetRelation::equivalent,
-         "x-y", {2, 3}, HistorySourceGeometry{{"prefix"}, HistorySetFamily::polytope, lifted}}, lifted}};
+    HistoryLiftedHMembership lifted{
+        request.domain.original.relation.metadata()->id, {{0, 2}}, {{0, 4}}};
+    request.domain.memberships = {
+        {{1},
+         {{"prefix"},
+          {"prefix"},
+          HistorySetFamily::polytope,
+          SetRelation::equivalent,
+          "x-y",
+          {2, 3},
+          HistorySourceGeometry{{"prefix"}, HistorySetFamily::polytope, lifted}},
+         lifted}};
     auto &start = std::get<SuppliedStart>(request.start);
     start.membership_witnesses = {HistoryHWitness{}};
     auto registration = adapters::nlp::make_casadi_history_optimizer_registration();
