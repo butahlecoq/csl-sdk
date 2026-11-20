@@ -102,6 +102,10 @@ else()
 endif()
 if(CSL_ENABLE_HIGHS AND CSL_ENABLE_QHULL)
   target_link_libraries(csl_closed_loop_native_policy PRIVATE CSL::qhull_conversion)
+  if(CSL_ENABLE_CASADI)
+    target_link_libraries(csl_closed_loop_native_policy PRIVATE
+      CSL::casadi_history_optimizer CSL::strategy_a CSL::strategy_b CSL::approximation)
+  endif()
 endif()
 target_compile_definitions(csl_closed_loop_native_policy PRIVATE
   CSL_NATIVE_HAS_QHULL=$<BOOL:${CSL_ENABLE_QHULL}>
@@ -157,6 +161,11 @@ if(BUILD_TESTING)
     include(src/${module}/Tests.cmake)
   endforeach()
   include(cmake/InstalledTests.cmake)
+  if(CSL_ENABLE_CASADI AND CSL_ENABLE_HIGHS AND CSL_ENABLE_QHULL)
+    add_test(NAME native_history_feedback_bridge
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_native_history_feedback.py
+              $<TARGET_FILE:csl_closed_loop_native_policy>)
+  endif()
 endif()
 
 if(CSL_CPP_QUALITY)
