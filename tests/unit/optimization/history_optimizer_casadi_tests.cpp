@@ -4,6 +4,8 @@
 #include <csl/adapters/nlp/casadi_history_optimizer.hpp>
 #include <csl/sets/data.hpp>
 #include <cmath>
+#include <functional>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -116,20 +118,42 @@ TEST_CASE("CasADi/IPOPT solves full history with typed selected-state membership
     for (auto &member : request.domain.memberships)
         member.origin.source =
                 HistorySourceGeometry{member.origin.reference, member.origin.selected_family, member.shape};
-    auto registration = adapters::nlp::make_casadi_history_optimizer_registration();
-    auto workspace = registration.factory(request);
-    const auto outcome = registry::HistoryOptimizerPort::run(*workspace, request, ExecutionContext{});
-    if (const auto *diagnostic = std::get_if<Diagnostic>(&outcome)) {
-        INFO(diagnostic->field);
-        FAIL_CHECK(diagnostic->explanation);
+    auto plain = adapters::nlp::make_casadi_history_optimizer_registration();
+    auto scaled = adapters::nlp::make_casadi_scaled_history_optimizer_registration(
+        {{100.0, 0.01}, {0.5}});
+    CHECK(plain.identity.id != scaled.identity.id);
+    for (auto &registration : {std::ref(plain), std::ref(scaled)}) {
+        auto workspace = registration.get().factory(request);
+        const auto outcome = registry::HistoryOptimizerPort::run(*workspace, request, ExecutionContext{});
+        if (const auto *diagnostic = std::get_if<Diagnostic>(&outcome)) {
+            INFO(diagnostic->field);
+            FAIL_CHECK(diagnostic->explanation);
+        }
+        REQUIRE(std::holds_alternative<HistoryOptimizationResult>(outcome));
+        const auto &result = std::get<HistoryOptimizationResult>(outcome);
+        CHECK(result.history[2] == doctest::Approx(0.3).epsilon(1e-5));
+        CHECK(result.history[6] == doctest::Approx(0.3).epsilon(1e-5));
+        CHECK(result.history[7] == doctest::Approx(0.0).epsilon(1e-5));
+        CHECK(result.source_cost.total == doctest::Approx(std::hypot(0.7, 1.0) + 0.6).epsilon(1e-5));
+        REQUIRE(result.membership_witnesses.size() == 1);
+        const auto &readback = std::get<VerifiedSuppliedStart>(result.initialization);
+        CHECK(readback.membership_witness_readback == start.membership_witnesses);
+        CHECK(readback.primal_readback == start.history);
     }
-    REQUIRE(std::holds_alternative<HistoryOptimizationResult>(outcome));
-    const auto &result = std::get<HistoryOptimizationResult>(outcome);
-    CHECK(result.history[2] == doctest::Approx(0.3).epsilon(1e-5));
-    CHECK(result.history[6] == doctest::Approx(0.3).epsilon(1e-5));
-    CHECK(result.history[7] == doctest::Approx(0.0).epsilon(1e-5));
-    CHECK(result.source_cost.total == doctest::Approx(std::hypot(0.7, 1.0) + 0.6).epsilon(1e-5));
-    REQUIRE(result.membership_witnesses.size() == 1);
-    const auto &readback = std::get<VerifiedSuppliedStart>(result.initialization);
-    CHECK(readback.membership_witness_readback == start.membership_witnesses);
+}
+
+TEST_CASE("Scaled CasADi admits only positive finite scales for every physical coordinate") {
+    using adapters::nlp::make_casadi_scaled_history_optimizer_registration;
+    const auto request = integrator_request(0.5);
+    const auto check = [&](Vector state, Vector control) {
+        auto registration = make_casadi_scaled_history_optimizer_registration(
+            {std::move(state), std::move(control)});
+        return registration.capabilities(request, {});
+    };
+    CHECK(std::holds_alternative<registry::Offer>(check({100., 0.01}, {0.5})));
+    CHECK(std::holds_alternative<Diagnostics>(check({100.}, {0.5})));
+    CHECK(std::holds_alternative<Diagnostics>(check({100., 0.01}, {})));
+    CHECK(std::holds_alternative<Diagnostics>(check({0., 0.01}, {0.5})));
+    CHECK(std::holds_alternative<Diagnostics>(check(
+        {100., std::numeric_limits<double>::infinity()}, {0.5})));
 }
