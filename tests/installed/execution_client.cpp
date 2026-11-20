@@ -39,11 +39,9 @@ Task prepare(std::string id, double coefficient) {
             "registration failed");
     auto prepared = std::get<reg::PreparedPipeline<IntervalPort>>(
         reg::prepare_pipeline(reg::select(registry, {{"interval"}, {}}, coefficient)));
-    auto task = std::get<Task>(
+    return std::get<Task>(
         ex::make_task(ex::TaskId{std::move(id)}, prepared,
                       {1, "one caller lane", 0, ex::CallStopSupport::noninterruptible}));
-    coefficient = 900;
-    return task;
 }
 }
 int main() try {
