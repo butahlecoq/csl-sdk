@@ -1245,6 +1245,22 @@ std::pair<Vector, Vector> history_axis_bounds(const Json &member, std::size_t di
     return {std::move(lower), std::move(upper)};
 }
 
+optimization::HistoryHMembership feedback_h_membership(const Json &member, const SetId &id,
+                                                       std::size_t dimension) {
+    const auto rows = [&](const char *field) {
+        auto values = matrix(member.at(field));
+        if (!values.rows)
+            values.cols = dimension;
+        return take(numeric::snapshot(values), field);
+    };
+    const auto rhs = [&](const char *field) {
+        return take(numeric::snapshot_vector(vector(member.at(field))), field);
+    };
+    return {take(sets::make_h({id, dimension, {}}, {rows("inequalities"), rhs("upper_bounds"),
+                                                    rows("equalities"), rhs("equality_values")}),
+                 "feedback H region")};
+}
+
 using NativeMembership =
     std::tuple<optimization::HistorySetFamily, optimization::HistoryMembershipShape,
                optimization::HistoryMembershipWitness>;
@@ -1267,9 +1283,8 @@ NativeMembership native_history_membership(const Json &member, const std::string
                                      vector(member.at("center")), matrix(member.at("factor"))),
                                  "feedback ellipsoid")},
                 HistoryBallFactorWitness{std::move(supplied_factor)}};
-    if (!supplied_factor.empty())
-        throw std::runtime_error(
-            "This feedback shape expects no caller-supplied latent coefficients.");
+    if (family == "polytope" && !supplied_factor.empty())
+        throw std::runtime_error("H feedback expects no caller-supplied latent coefficients.");
     if (kind == "lifted-h") {
         HistoryLiftedHMembership projection{carrier, {}, {}};
         const auto &selection = member.at("row_selection");
@@ -1289,21 +1304,9 @@ NativeMembership native_history_membership(const Json &member, const std::string
         }
         return {HistorySetFamily::polytope, std::move(projection), HistoryHWitness{}};
     }
-    if (family == "polytope") {
-        const auto rows = [&](const char *field) {
-            auto values = matrix(member.at(field));
-            if (!values.rows)
-                values.cols = n;
-            return take(numeric::snapshot(values), field);
-        };
-        const auto rhs = [&](const char *field) {
-            return take(numeric::snapshot_vector(vector(member.at(field))), field);
-        };
-        auto set = take(sets::make_h({id, n, {}}, {rows("inequalities"), rhs("upper_bounds"),
-                                                   rows("equalities"), rhs("equality_values")}),
-                        "feedback H region");
-        return {HistorySetFamily::polytope, HistoryHMembership{std::move(set)}, HistoryHWitness{}};
-    }
+    if (family == "polytope")
+        return {HistorySetFamily::polytope, feedback_h_membership(member, id, n),
+                HistoryHWitness{}};
     auto [lower, upper] = history_axis_bounds(member, n);
     if (family == "parallelotope") {
         auto frame = matrix(member.at("parallelotope_frame"));
@@ -1317,7 +1320,9 @@ NativeMembership native_history_membership(const Json &member, const std::string
         return {HistorySetFamily::parallelotope,
                 HistoryParallelotopeMembership{Vector(n, 0), std::move(frame), std::move(lower),
                                                std::move(upper)},
-                HistoryParallelotopeWitness{Vector(state.begin(), state.end())}};
+                HistoryParallelotopeWitness{supplied_factor.empty()
+                                                ? Vector(state.begin(), state.end())
+                                                : std::move(supplied_factor)}};
     }
     Vector center(n), radii(n), coefficients(n);
     for (std::size_t i = 0; i < n; ++i) {
@@ -1327,7 +1332,8 @@ NativeMembership native_history_membership(const Json &member, const std::string
             coefficients[i] = std::clamp((state[i] - center[i]) / radii[i], -1.0, 1.0);
     }
     return {HistorySetFamily::box, HistoryAxisBoxMembership{std::move(center), std::move(radii)},
-            HistoryAxisBoxWitness{std::move(coefficients)}};
+            HistoryAxisBoxWitness{supplied_factor.empty() ? std::move(coefficients)
+                                                          : std::move(supplied_factor)}};
 }
 
 auto native_history_provider(const Json &input) {
@@ -1380,23 +1386,69 @@ Json solve_native_history(const Json &input, const problem::ResolvedProblem &pro
     const auto original_h = std::get<sets::HRepresentation>(exported.relation.representation());
     std::vector<HistoryMembership> memberships;
     std::vector<HistoryMembershipWitness> witnesses;
+    std::vector<std::pair<std::size_t, double>> strict_coordinates;
+    Json binding_receipts = Json::array();
     for (const auto &stage : geometry.at("stages")) {
         const auto k = stage.at("stage").get<std::size_t>();
+        const auto &members = stage.at("memberships");
+        if (k > horizon || k != witnesses.size() / 3 || members.size() != 3)
+            return query_failure(input, "failed", "Incomplete or unordered native stage geometry.");
         const auto state = std::span<const double>{start}.subspan(k * n, n);
-        for (const auto &member : stage.at("memberships")) {
+        for (const auto &member : members) {
             const SetId id{member.at("set_id").get<std::string>()};
             auto [family, shape, witness] = native_history_membership(
                 member, family_name, id, state, vector(factors.at(witnesses.size())), carrier,
                 original_h);
-            HistorySourceGeometry origin{id, family, shape};
+            for (const auto &predicate : member.at("strict_source_domain")) {
+                const auto coordinate = predicate.at("coordinate").get<std::size_t>();
+                const auto lower = predicate.at("lower_bound").get<double>();
+                if (coordinate >= n || predicate.at("strict") != true || !std::isfinite(lower))
+                    return query_failure(input, "rejected", "Unsupported source-domain predicate.");
+                if (k == 0 &&
+                    !(input.at("observed_physical_state").at(coordinate).get<double>() > lower))
+                    return query_failure(input, "rejected",
+                                         "Observation violates the strict source domain.");
+                strict_coordinates.emplace_back(k * n + coordinate, lower);
+            }
+            const auto role = member.at("role").get<std::string>();
+            const auto &relation_name = member.at("relation");
+            if (relation_name != "outer" && relation_name != "equivalent")
+                return query_failure(input, "rejected", "Unsupported native geometry relation.");
+            const auto relation =
+                relation_name == "outer" ? SetRelation::outer : SetRelation::equivalent;
+            HistorySourceGeometry origin = [&]() -> HistorySourceGeometry {
+                if (const auto *lifted = std::get_if<HistoryLiftedHMembership>(&shape))
+                    return {id, HistorySetFamily::polytope, *lifted};
+                const auto &source = stage.at(role + "_h");
+                const SetId reference{source.at("set_id").get<std::string>()};
+                return {reference, HistorySetFamily::polytope,
+                        feedback_h_membership(source, reference, n)};
+            }();
+            binding_receipts.push_back({{"stage", k},
+                                        {"role", role},
+                                        {"selected", id.value},
+                                        {"reference", origin.id.value},
+                                        {"relation", member.at("relation")}});
             memberships.push_back(
                 {{k},
-                 {id, id, family, SetRelation::equivalent, "source-state",
+                 {origin.id, id, family, relation, "source-state",
                   member.at("indices").get<std::vector<std::size_t>>(), std::move(origin)},
                  std::move(shape)});
             witnesses.push_back(std::move(witness));
         }
     }
+
+    if (witnesses.size() != factors.size())
+        return query_failure(input, "failed",
+                             "Native stage geometry did not cover the full horizon.");
+    const auto holds_strict_domain = [&](std::span<const double> history) {
+        return std::all_of(
+            strict_coordinates.begin(), strict_coordinates.end(),
+            [&](const auto &predicate) { return history[predicate.first] > predicate.second; });
+    };
+    if (!holds_strict_domain(start))
+        return query_failure(input, "rejected",
+                             "Supplied history violates the strict source domain.");
 
     auto registration = native_history_provider(input);
     StrategyConfiguration configuration;
@@ -1522,6 +1574,7 @@ Json solve_native_history(const Json &input, const problem::ResolvedProblem &pro
         {"objective", plan.reported_objective},
         {"maximum_history_violation", plan.maximum_history_violation},
         {"raw_diagnostics", plan.diagnostics},
+        {"geometry_bindings", std::move(binding_receipts)},
         {"geometry_factors", std::move(latent)},
         {"supplied_readback", std::holds_alternative<VerifiedSuppliedStart>(plan.initialization)}};
     const auto *candidate =
@@ -1529,8 +1582,31 @@ Json solve_native_history(const Json &input, const problem::ResolvedProblem &pro
     const auto *actual = candidate && candidate->relation.payload
                              ? candidate->relation.payload->h_relation_for_recording()
                              : nullptr;
-    if (!actual || set_json(*actual) != set_json(exported.relation)) {
+    const auto same_rows = [](const numeric::MatrixView &lhs, const numeric::MatrixView &rhs) {
+        if (lhs.rows() != rhs.rows() || lhs.cols() != rhs.cols())
+            return false;
+        for (std::size_t i = 0; i < lhs.rows(); ++i)
+            for (std::size_t j = 0; j < lhs.cols(); ++j)
+                if (lhs(i, j) != rhs(i, j))
+                    return false;
+        return true;
+    };
+    const bool same_carrier = [&] {
+        if (!actual)
+            return false;
+        const auto representation = actual->representation();
+        const auto *h = std::get_if<sets::HRepresentation>(&representation);
+        return h && same_rows(h->inequalities, original_h.inequalities) &&
+               same_rows(h->equalities, original_h.equalities) &&
+               std::ranges::equal(h->upper_bounds.values(), original_h.upper_bounds.values()) &&
+               std::ranges::equal(h->equality_values.values(), original_h.equality_values.values());
+    }();
+    if (!same_carrier) {
         response["reason"] = "Strategy carrier differs from the exported history rows.";
+        return response;
+    }
+    if (!holds_strict_domain(plan.history)) {
+        response["reason"] = "Returned history violates the strict source domain.";
         return response;
     }
     if (result.termination == Termination::completed) {

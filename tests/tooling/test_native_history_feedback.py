@@ -131,9 +131,82 @@ for family in ("box", "parallelotope", "zonotope", "ellipsoid"):
             for strategy in ("A", "B")
         ]
     )
-    for result in solves:
+    for strategy, result in zip(("A", "B"), solves, strict=True):
         assert result["status"] == "solved", result
         assert result["solver_receipt"]["supplied_readback"]
         assert result["solver_receipt"]["provider"] == provider
         assert len(result["solver_receipt"]["geometry_factors"]) == len(seed)
         assert math.isclose(result["primal"][-1], 0.25, abs_tol=1e-7)
+
+        bindings = result["solver_receipt"]["geometry_bindings"]
+        expected = [
+            dict(
+                stage=stage["stage"],
+                role=member["role"],
+                selected=member["set_id"],
+                reference=stage[member["role"] + "_h"]["set_id"],
+                relation=member["relation"],
+            )
+            for stage in result["geometry"]["stages"]
+            for member in stage["memberships"]
+        ]
+        assert bindings == expected
+        assert any(
+            item["selected"] != item["reference"] and item["relation"] == "outer"
+            for item in bindings
+        )
+        if family in {"box", "parallelotope"}:
+            [round_trip] = exchange(
+                [
+                    dict(
+                        options,
+                        native_history_strategy=strategy,
+                        native_history_optimizer=provider,
+                        initial_primal=result["primal"],
+                        initial_geometry_factors=result["solver_receipt"][
+                            "geometry_factors"
+                        ],
+                    )
+                ]
+            )
+            assert round_trip["status"] == "solved", round_trip
+
+orbit = dict(
+    request,
+    task_id="env717-earth-orbit/continuous-receding/1",
+    native_history_strategy="A",
+)
+[bad_observation, invalid_warm_start, invalid_solution] = exchange(
+    [
+        orbit,
+        dict(
+            orbit,
+            observed_physical_state=[0.5, 0.0],
+            initial_primal=[0.5, 0.0, -0.5, 0.0, -1.0],
+        ),
+        dict(
+            orbit,
+            observed_physical_state=[0.5, 0.0],
+            initial_primal=[0.5, 0.0, 0.5, 0.0, 0.0],
+            terminal_objective={
+                "kind": "quadratic",
+                "Q": [[2.0, 0.0], [0.0, 0.0]],
+                "linear": [2.0, 0.0],
+                "offset": 1.0,
+            },
+        ),
+    ]
+)
+assert (
+    bad_observation["status"] == "rejected"
+    and "Observation violates" in bad_observation["reason"]
+), bad_observation
+assert (
+    invalid_warm_start["status"] == "rejected"
+    and "Supplied history violates" in invalid_warm_start["reason"]
+), invalid_warm_start
+assert (
+    invalid_solution["status"] == "failed"
+    and "Returned history violates" in invalid_solution["reason"]
+), invalid_solution
+assert "solver_receipt" in invalid_solution and "primal" not in invalid_solution
