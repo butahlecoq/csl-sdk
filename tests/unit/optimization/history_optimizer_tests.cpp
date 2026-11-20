@@ -520,3 +520,38 @@ TEST_CASE("whole-history memberships check real latent witnesses and retain the 
         CHECK(candidate.calls == before);
     }
 }
+
+TEST_CASE("Lifted H membership binds selected original rows and uses the canonical history witness") {
+    using namespace optimization;
+    auto query = request();
+    query.domain.state_frame = "state";
+    HistoryLiftedHMembership lifted{{"full-history"}, {{1, 2}}, {}};
+    query.domain.memberships = {{{1},
+        {{"stage"}, {"stage"}, HistorySetFamily::polytope, SetRelation::equivalent,
+         "state", {1}, HistorySourceGeometry{{"stage"}, HistorySetFamily::polytope, lifted}},
+        lifted}};
+    const std::vector<HistoryMembershipWitness> witnesses{HistoryHWitness{}};
+    REQUIRE(check_history_domain_memberships(query.domain).empty());
+    CHECK(check_history_membership_witnesses(query.domain, Vector{1, 0, 2.0}, witnesses, {}).empty());
+    CHECK_FALSE(check_history_membership_witnesses(query.domain, Vector{1, 0, -0.5}, witnesses, {}).empty());
+
+    std::get<SuppliedStart>(query.start).membership_witnesses = witnesses;
+    Candidate backend;
+    backend.candidate = {1, 0, 2.0};
+    backend.candidate_memberships = witnesses;
+    const auto result = HistoryOptimizerPort::run(backend, query, ExecutionContext{});
+    CHECK(std::holds_alternative<Diagnostic>(result));
+    CHECK(backend.calls == 1);
+
+    auto change_geometry = [&](const HistoryLiftedHMembership &changed) {
+        auto &member = query.domain.memberships.front();
+        member.shape = changed;
+        member.origin.source->geometry = changed;
+    };
+    change_geometry({{"different-history"}, {{1, 2}}, {}});
+    CHECK_FALSE(check_history_domain_memberships(query.domain).empty());
+    change_geometry({{"full-history"}, {{1, 3}}, {}});
+    CHECK_FALSE(check_history_domain_memberships(query.domain).empty());
+    change_geometry({{"full-history"}, {{0, 2}, {1, 2}}, {}});
+    CHECK_FALSE(check_history_domain_memberships(query.domain).empty());
+}
