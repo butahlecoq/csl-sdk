@@ -2,7 +2,9 @@
 #include <doctest/doctest.h>
 #include <csl/optimization/finite_action_zonotope_minimax.hpp>
 #include <two_points_fixture.hpp>
+#include "../../../src/optimization/zonotope_corner_certificate.hpp"
 
+#include <chrono>
 #include <limits>
 
 using namespace csl;
@@ -63,7 +65,7 @@ TEST_CASE("analytic scalar selector scores every fixed plan and replays the mini
 }
 
 TEST_CASE("factor corner refusal remains in every candidate row and marks search incomplete") {
-    const auto answer = finite_action_zonotope_minimax(analytic_request(), {3,2,2,4,1});
+    const auto answer = finite_action_zonotope_minimax(analytic_request(), {3,2,2,4,0});
     REQUIRE(std::holds_alternative<FiniteActionZonotopeMinimaxResult>(answer));
     const auto& result = std::get<FiniteActionZonotopeMinimaxResult>(answer);
     CHECK(result.candidate_search == CandidateSearchCoverage::incomplete);
@@ -193,4 +195,57 @@ TEST_CASE("pinned TwoPoints selected plan is replayed over the full finite distu
     const auto exact_score = worst_case_vertex(selected.replay.terminal_catalogue, request.objective, 27);
     REQUIRE(std::holds_alternative<WorstCaseValue>(exact_score));
     CHECK(std::abs(std::get<WorstCaseValue>(exact_score).value - selected.replay.worst_value) < 1e-12);
+}
+
+TEST_CASE("one certified corner gives the same scores as ordinary enumeration") {
+    const auto request = analytic_request();
+    const auto exhaustive = finite_action_zonotope_minimax(request, {3, 2, 2, 4, 16});
+    const auto reduced = finite_action_zonotope_minimax(request, {3, 2, 2, 4, 1});
+    REQUIRE(std::holds_alternative<FiniteActionZonotopeMinimaxResult>(exhaustive));
+    REQUIRE(std::holds_alternative<FiniteActionZonotopeMinimaxResult>(reduced));
+    const auto &regular = std::get<FiniteActionZonotopeMinimaxResult>(exhaustive);
+    const auto &certified = std::get<FiniteActionZonotopeMinimaxResult>(reduced);
+    REQUIRE(certified.plan_attempts.size() == regular.plan_attempts.size());
+    for (std::size_t i = 0; i < regular.plan_attempts.size(); ++i) {
+        const auto *scored = std::get_if<ZonotopePlanScored>(&certified.plan_attempts[i]);
+        REQUIRE(scored);
+        CHECK(scored->score.factor_corners_evaluated == 1);
+        CHECK(scored->score.terminal_factor_corner_maximum ==
+              doctest::Approx(std::get<ZonotopePlanScored>(regular.plan_attempts[i])
+                                  .score.terminal_factor_corner_maximum)
+                  .epsilon(1e-14));
+    }
+    REQUIRE(certified.candidate_search == CandidateSearchCoverage::complete);
+    CHECK(std::get<ZonotopePlanSelected>(certified.selection).candidate_attempt_index == 1);
+}
+
+TEST_CASE("terminal sign certificate resolves compatible pairs below binary64 product range") {
+    using csl::optimization::detail::certify_zonotope_corner;
+    const auto tiny = std::numeric_limits<double>::denorm_min();
+    const reachability::FinitePlanZonotopeTrace::Stage factors{
+        {0}, {1, 2, {tiny, -tiny}}, {{"left"}, {"right"}}};
+    const auto objective = std::get<Objective>(snapshot(QuadraticTerminal{{1, 1, {2}}, {0}, 0}));
+    const auto result = certify_zonotope_corner(factors, objective, {});
+    const auto *signs = std::get_if<std::vector<int>>(&result);
+    REQUIRE(signs);
+    CHECK(*signs == std::vector<int>{1, -1});
+}
+
+TEST_CASE("terminal sign certificate refuses a frustrated triangle and enforces its resource cap") {
+    using csl::optimization::detail::certify_zonotope_corner;
+    const auto objective =
+        std::get<Objective>(snapshot(QuadraticTerminal{{2, 2, {2, 0, 0, 2}}, {0, 0}, 0}));
+    const reachability::FinitePlanZonotopeTrace::Stage triangle{
+        {0, 0}, {2, 3, {1, -1, -1, 0, 1, -2}}, {{"a"}, {"b"}, {"c"}}};
+    CHECK(std::holds_alternative<std::monostate>(certify_zonotope_corner(triangle, objective, {})));
+
+    const reachability::FinitePlanZonotopeTrace::Stage oversized{
+        {0, 0}, {2, 129, Vector(2 * 129, 1)}, std::vector<sets::FactorId>(129)};
+    CHECK(
+        std::holds_alternative<std::monostate>(certify_zonotope_corner(oversized, objective, {})));
+    ExecutionContext context;
+    context.deadline = std::chrono::steady_clock::time_point::min();
+    const auto expired = certify_zonotope_corner(triangle, objective, context);
+    REQUIRE(std::holds_alternative<OperationStopped>(expired));
+    CHECK(std::get<OperationStopped>(expired).reason == StopReason::deadline_expired);
 }
