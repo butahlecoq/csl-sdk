@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.31)
 project(CSLInstalledConsumer LANGUAGES CXX)
+if(CSL_CHECK_MISSING_IPOPT)
+  find_package(CSL 0.1 CONFIG QUIET)
+  if(CSL_FOUND OR TARGET CSL::ipopt_convex OR NOT CSL_NOT_FOUND_MESSAGE MATCHES "Ipopt 3.14.19")
+    message(FATAL_ERROR "An unavailable Ipopt dependency must make the CSL package unavailable")
+  endif()
+  return()
+endif()
 find_package(CSL 0.1 CONFIG REQUIRED)
 
 if(CSL_EXPECT_IPOPT AND NOT TARGET CSL::ipopt_convex)

@@ -143,7 +143,8 @@ bool configure(IpoptProblem native, ipindex limit) {
     const auto number = [&](std::string key, double value) {
         return AddIpoptNumOption(native, key.data(), value);
     };
-    return integer("print_level", 0) && text("sb", "yes") && text("nlp_scaling_method", "none") &&
+    return text("option_file_name", "") && integer("print_level", 0) && text("sb", "yes") &&
+           text("nlp_scaling_method", "none") &&
            text("fixed_variable_treatment", "make_constraint") && number("bound_relax_factor", 0) &&
            number("tol", 1e-10) && number("dual_inf_tol", 1e-10) &&
            number("constr_viol_tol", 1e-10) && number("compl_inf_tol", 1e-10) &&

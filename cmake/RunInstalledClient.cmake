@@ -151,6 +151,12 @@ endif()
 if(CSL_TOOLSET)
   list(APPEND generator_args -T "${CSL_TOOLSET}")
 endif()
+if(CSL_EXPECT_IPOPT)
+  execute_process(COMMAND "${CMAKE_COMMAND}" -S "${work}/source" -B "${work}/missing-ipopt"
+    ${generator_args} "-DCMAKE_PREFIX_PATH=${prefix}" "-DCMAKE_CXX_COMPILER=${CSL_CXX_COMPILER}"
+    -DCSL_CHECK_MISSING_IPOPT=ON -DCMAKE_DISABLE_FIND_PACKAGE_Ipopt=TRUE
+    ${casadi_args} COMMAND_ERROR_IS_FATAL ANY)
+endif()
 execute_process(COMMAND "${CMAKE_COMMAND}" -S "${work}/source" -B "${work}/build"
   ${generator_args} "-DCMAKE_PREFIX_PATH=${prefix}" "-DCMAKE_BUILD_TYPE=${CSL_CONFIG}"
   ${casadi_args} ${ipopt_args}
