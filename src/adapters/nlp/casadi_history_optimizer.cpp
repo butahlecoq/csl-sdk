@@ -53,6 +53,8 @@ bool fits_casadi_request(const optimization::HistoryOptimizationRequest &request
                         std::get<sets::HRepresentation>(selected.selected.representation());
                     return fits_casadi_dimension(h.inequalities.rows()) &&
                            fits_casadi_dimension(h.equalities.rows());
+                } else if constexpr (std::is_same_v<T, optimization::HistoryLiftedHMembership>) {
+                    return true;
                 } else if constexpr (std::is_same_v<T, optimization::HistoryAxisBoxMembership>) {
                     return fits_casadi_dimension(selected.radii.size());
                 } else if constexpr (std::is_same_v<T, optimization::HistoryZonotopeMembership>) {
@@ -170,6 +172,9 @@ constrain_memberships(casadi::Opti &opti, const MX &history,
                 if constexpr (std::is_same_v<T, optimization::HistoryHMembership>) {
                     constrain(opti, state, selected.selected, state_scales);
                     variables.push_back(std::nullopt);
+                } else if constexpr (std::is_same_v<T, optimization::HistoryLiftedHMembership>) {
+                    // These rows already constrain the canonical history.
+                    variables.push_back(std::nullopt);
                 } else {
                     Matrix factor;
                     Vector center;
@@ -251,7 +256,8 @@ optimization::HistoryMembershipWitness make_witness(const optimization::HistoryM
     return std::visit(
         [&](const auto &selected) -> optimization::HistoryMembershipWitness {
             using T = std::decay_t<decltype(selected)>;
-            if constexpr (std::is_same_v<T, optimization::HistoryHMembership>)
+            if constexpr (std::is_same_v<T, optimization::HistoryHMembership> ||
+                          std::is_same_v<T, optimization::HistoryLiftedHMembership>)
                 return optimization::HistoryHWitness{};
             else if constexpr (std::is_same_v<T, optimization::HistoryAxisBoxMembership>)
                 return optimization::HistoryAxisBoxWitness{std::move(coefficients)};
