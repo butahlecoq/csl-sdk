@@ -235,10 +235,18 @@ optimization::HistoryMembershipWitness make_witness(const optimization::HistoryM
 }
 class NativeWorkspace final : public optimization::HistoryOptimizerWorkspace {
     std::optional<CasadiHistoryScaling> scaling_;
+    bool detect_dependencies_;
+
+    std::string configuration_evidence() const {
+        auto evidence = scaling_evidence(scaling_);
+        if (detect_dependencies_)
+            evidence += "; dependency_detector=mumps; dependency_detection_with_rhs=yes";
+        return evidence;
+    }
 
 public:
-    explicit NativeWorkspace(std::optional<CasadiHistoryScaling> scaling)
-        : scaling_(std::move(scaling)) {}
+    NativeWorkspace(std::optional<CasadiHistoryScaling> scaling, bool detect_dependencies)
+        : scaling_(std::move(scaling)), detect_dependencies_(detect_dependencies) {}
 
     optimization::RawHistorySolveOutcome solve_candidate(const optimization::HistoryOptimizationRequest& request,
         const ExecutionContext& context) override {
@@ -329,6 +337,10 @@ public:
                 {"warm_start_init_point","yes"}};
             if (scaling_)
                 options["nlp_scaling_method"] = "none";
+            if (detect_dependencies_) {
+                options["dependency_detector"] = "mumps";
+                options["dependency_detection_with_rhs"] = "yes";
+            }
             if(context.deadline)
                 options["max_wall_time"]=std::max(0.001,std::chrono::duration<double>(
                     *context.deadline-std::chrono::steady_clock::now()).count());
@@ -341,7 +353,7 @@ public:
                 "; IPOPT; "+opti.stats().at("return_status").to_string()+
                 "; iterations="+std::to_string(static_cast<double>(opti.stats().at("iter_count")))+
                 "; all history coordinates free; local numerical" +
-                scaling_evidence(scaling_);
+                configuration_evidence();
             std::vector<optimization::HistoryMembershipWitness> membership_witnesses;
             for (std::size_t i = 0; i < membership_variables.size(); ++i) {
                 auto coefficients = membership_variables[i]
@@ -361,13 +373,14 @@ public:
             if(context.deadline&&std::chrono::steady_clock::now()>=*context.deadline)
                 return OperationStopped{StopReason::deadline_expired,"Native CasADi history optimization deadline expired"};
             return Diagnostic{DiagnosticCode::unsupported, "history.casadi_ipopt",
-                              std::string(error.what()) + scaling_evidence(scaling_)};
+                              std::string(error.what()) + configuration_evidence()};
         }
     }
 };
 
 registry::Registration<registry::HistoryOptimizerPort>
-make_registration(ModuleId id, std::optional<CasadiHistoryScaling> scaling) {
+make_registration(ModuleId id, std::optional<CasadiHistoryScaling> scaling,
+                  bool detect_dependencies = false) {
     return {{std::move(id), "1"},
         [scaling](const optimization::HistoryOptimizationRequest& request,const registry::Requirements&)->registry::Capability {
             const auto diagnostics=optimization::check_history_optimization_request(request);
@@ -380,9 +393,9 @@ make_registration(ModuleId id, std::optional<CasadiHistoryScaling> scaling) {
                      "CasADi/IPOPT requires an explicitly supplied feasible full-history start."}};
             return registry::Offer{{{"csl.whole-history-source-cost.v1"},Assurance::numerical,{},{},{}}};
         },
-        [scaling = std::move(scaling)](const optimization::HistoryOptimizationRequest&)
+        [scaling = std::move(scaling), detect_dependencies](const optimization::HistoryOptimizationRequest&)
             -> std::unique_ptr<optimization::HistoryOptimizerWorkspace> {
-            return std::make_unique<NativeWorkspace>(scaling);
+            return std::make_unique<NativeWorkspace>(scaling, detect_dependencies);
         }};
 }
 } // namespace
@@ -394,5 +407,9 @@ registry::Registration<registry::HistoryOptimizerPort> make_casadi_history_optim
 registry::Registration<registry::HistoryOptimizerPort>
 make_casadi_scaled_history_optimizer_registration(CasadiHistoryScaling scaling) {
     return make_registration({"csl.nlp.casadi-ipopt.scaled-history-cost"}, std::move(scaling));
+}
+registry::Registration<registry::HistoryOptimizerPort>
+make_casadi_mumps_history_optimizer_registration(std::optional<CasadiHistoryScaling> scaling) {
+    return make_registration({"csl.nlp.casadi-ipopt.mumps-history-cost"}, std::move(scaling), true);
 }
 } // namespace csl::adapters::nlp
