@@ -213,7 +213,7 @@ TEST_CASE("RAII close preserves cancellation resource limits and exception failu
             limited.close();
         }
         try {
-            auto failed = accepted(timer->start({3}));
+            [[maybe_unused]] const auto failed = accepted(timer->start({3}));
             throw 7;
         } catch (int) {
         }
