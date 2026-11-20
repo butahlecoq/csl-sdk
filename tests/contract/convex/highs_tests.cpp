@@ -92,6 +92,74 @@ TEST_CASE("primal hints are owned snapshots with unchanged problem identity and 
     CHECK(result.raw_diagnostics.find("phase.qp.basis.inactive_free_rows=1")!=std::string::npos);
 }
 
+TEST_CASE("opt-in row scaling solves the original mixed-scale QP") {
+    const double small=std::ldexp(1.0,-45);
+    const auto p=accepted(make_convex_program({
+        {{"native-convex"},{"scaled-row"}},
+        QuadraticTerminal{{2,2,{2,0,0,2}},{-6,-2},10},
+        {1,2,{0,2},{0,1},{1,small}},{{0,5},{0,5}},{{2,2}},{}
+    }));
+    bool supplied_start=false;
+    SUBCASE("cold solve") {}
+    SUBCASE("source-coordinate warm start") { supplied_start=true; }
+    const auto requested=supplied_start?accepted(with_primal_start(p,Vector{2,0})):p;
+    Registry<ConvexPort> registry;
+    REQUIRE_FALSE(registry.add(accepted(make_highs_row_scaled_registration())));
+    Requirements requirements; requirements.output.representation={"csl.program-result.v1"};
+    auto [worker]=accepted(prepare_pipeline(select(registry,Method{{"csl.convex.highs.row-scaled"},{}},
+                                                  requested,requirements))).create();
+    const auto result=accepted(worker->run(context()));
+    optimum(result,requested,1);
+    REQUIRE(result.primal);
+    CHECK(result.primal->at(0)==doctest::Approx(2));
+    CHECK(result.primal->at(1)==doctest::Approx(1));
+    CHECK(result.raw_diagnostics.find("model.row_scaling=0:6")!=std::string::npos);
+    if(supplied_start)
+        CHECK(result.raw_diagnostics.find("phase.feasibility.primal_start.retained=true")!=std::string::npos);
+}
+
+TEST_CASE("row scaling declines excessive shifts and scaled bound overflow") {
+    auto registration=accepted(make_highs_row_scaled_registration());
+    for (int exponent : {-85, -120, -45}) {
+        auto input=parabola();
+        input.constraints={1,1,{0,1},{0},{std::ldexp(1.0,exponent)}};
+        input.rows=exponent==-45?std::vector<Interval>{{std::numeric_limits<double>::max(),{}}}
+                                :std::vector<Interval>{{1,1}};
+        const auto p=accepted(make_convex_program(input));
+        const auto result=registration.factory(p)->solve(p,context());
+        REQUIRE(std::holds_alternative<Unsupported>(result));
+        CHECK(std::get<Unsupported>(result).diagnostics.front().field=="highs.convex.matrix");
+    }
+}
+
+TEST_CASE("scaled-row envelope remains conditional and known excessive capacity is refused") {
+    Registry<ConvexPort> registry;
+    REQUIRE_FALSE(registry.add(accepted(make_highs_row_scaled_registration())));
+    const auto provider=accepted(prepare_provider(
+        select_provider(registry,{{"csl.convex.highs.row-scaled"},{}})));
+    const auto check=provider.declare_support(
+        {"hybrid.convex-optimization",2,2,3,"quadratic",std::ldexp(1.0,-45)});
+    CHECK(check.status==AdmissionStatus::conditional);
+    CHECK_FALSE(check.envelope_is_sufficient);
+    const auto excessive=provider.declare_support(
+        {"hybrid.convex-optimization",2,4097,3,"quadratic",std::ldexp(1.0,-45)});
+    CHECK(excessive.status==AdmissionStatus::unsupported);
+}
+
+TEST_CASE("scaled row retains original identity when native infeasibility is uncertified") {
+    const auto p=accepted(make_convex_program({
+        {{"native-convex"},{"scaled-infeasible"}},
+        QuadraticTerminal{{2,2,{2,0,0,2}},{-6,-2},10},
+        {1,2,{0,2},{0,1},{1,std::ldexp(1.0,-45)}},{{0,1},{0,1}},{{2,2}},{}
+    }));
+    auto registration=accepted(make_highs_row_scaled_registration());
+    const auto result=accepted(registration.factory(p)->solve(p,context()));
+    CHECK(result.outcome.subject==p.identity());
+    CHECK(result.termination==Termination::numerical_failure);
+    CHECK(result.outcome.value==MathematicalOutcome::undetermined);
+    CHECK(result.raw_diagnostics.find("classification.withheld=row scaling")!=std::string::npos);
+}
+
 TEST_CASE("QP starts retain free-row primal hints and disclose infeasible-hint repair") {
     for(const double hint:{1.25,6.0,-1.0}) {
         auto input=parabola();
