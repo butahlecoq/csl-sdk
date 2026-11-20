@@ -314,11 +314,11 @@ TEST_CASE("lifted projections exclude future rows and retain the full terminal c
     const auto h = std::get<sets::HRepresentation>(lifted.history.relation.representation());
     CHECK_FALSE(contains(lifted.history.relation, history(0.25, 0.25)));
 
-    const auto prefix_contains = [&](std::size_t stage, const Vector& values) {
-        const auto& prefix = lifted.prefixes.at(stage);
-        const auto check_rows = [&](const numeric::MatrixView& rows, const numeric::VectorView& b,
-                                    const auto& ranges, bool equality) {
-            for (const auto& range : ranges)
+    const auto prefix_contains = [&](std::size_t stage, const Vector &values) {
+        const auto &prefix = lifted.prefixes.at(stage);
+        const auto check_rows = [&](const numeric::MatrixView &rows, const numeric::VectorView &b,
+                                    const auto &ranges, bool equality) {
+            for (const auto &range : ranges)
                 for (std::size_t row = range.begin; row < range.end; ++row) {
                     double lhs = 0;
                     for (std::size_t column = 0; column < values.size(); ++column)
