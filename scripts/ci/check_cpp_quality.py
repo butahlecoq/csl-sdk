@@ -685,7 +685,7 @@ def coverage(receipts: list[dict[str, object]], source: Corpus) -> dict[str, obj
         require(not missing, f"Uncovered {label}: " + ", ".join(sorted(missing)))
     return {
         "status": "passed",
-        "scope": "include/src/tests/examples",
+        "scope": "/".join(source.roots),
         "retained_paths": len(source.hashes),
         "frozen_inputs": sorted(source.frozen),
         "profiles": sorted(profiles),

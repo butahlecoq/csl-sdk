@@ -7,6 +7,7 @@ on:
       - 'src/**'
       - 'tests/**'
       - 'examples/**'
+      - 'tools/**'
       - 'cmake/**'
       - 'CMakeLists.txt'
       - 'CMakePresets.json'
@@ -23,6 +24,7 @@ on:
       - 'src/**'
       - 'tests/**'
       - 'examples/**'
+      - 'tools/**'
       - 'cmake/**'
       - 'CMakeLists.txt'
       - 'CMakePresets.json'
@@ -93,6 +95,8 @@ jobs:
           -DCSL_CPP_QUALITY=ON -DCSL_CPP_QUALITY_PROFILE=${{ matrix.profile }}
           -DCSL_ENABLE_HIGHS=${{ matrix.highs }} -DCSL_ENABLE_QHULL=${{ matrix.qhull }}
           -DCSL_ENABLE_CASADI=${{ matrix.casadi }} -Dcasadi_DIR="$CASADI_CMAKE_DIR"
+          -DCSL_BUILD_NOMINAL_TUBE_CAPTURE=${{ matrix.highs }}
+          -DCSL_BUILD_HISTORY_MEMBERSHIP_2D_EXAMPLE=${{ matrix.casadi }}
           -DPython3_EXECUTABLE="$(command -v python)"
       - name: Build the complete real profile serially
         run: cmake --build "$BUILD_ROOT" --parallel 1
