@@ -396,6 +396,11 @@ class Workspace final : public ConvexWorkspace {
         auto finish=[&]() -> ProgramOutcome {
             capture.poll();
             if(capture.stop) { result.termination=*capture.stop; result.outcome.value=MathematicalOutcome::undetermined; }
+            if(result.outcome.value==MathematicalOutcome::optimal && !passes(result,c.numerical)) {
+                result.termination=Termination::numerical_failure;
+                result.outcome.value=MathematicalOutcome::undetermined;
+                raw<<"\noptimality.withheld=original-space checks unavailable or failing";
+            }
             if(!powers.empty() && (result.outcome.value==MathematicalOutcome::infeasible ||
                                    result.outcome.value==MathematicalOutcome::unbounded)) {
                 result.termination=Termination::numerical_failure;
@@ -422,7 +427,6 @@ class Workspace final : public ConvexWorkspace {
             if(feasible) {
                 HighsSolution s; s.value_valid=true; s.dual_valid=true; s.row_value.assign(q.rows().size(),0); s.row_dual.assign(q.rows().size(),0);
                 candidate(result,p,c,s,raw,true);
-                if(!passes(result,c.numerical)) {result.termination=Termination::numerical_failure;result.outcome.value=MathematicalOutcome::undetermined;}
             }
             raw<<"\nnative_run=false\nwrapper.decision=constant_rows\nnative.info=unavailable";return finish();
         }
@@ -534,10 +538,6 @@ class Workspace final : public ConvexWorkspace {
                 else raw<<"\nphase.linear.info=unavailable";
                 classify(result,api,status);
                 if(api!=HighsStatus::kError) candidate(result,p,c,h.getSolution(),raw,true,false,powers);
-            }
-            if(result.outcome.value==MathematicalOutcome::optimal && !passes(result,c.numerical)) {
-                result.termination=Termination::numerical_failure; result.outcome.value=MathematicalOutcome::undetermined;
-                raw<<"\noptimality.withheld=original-space checks unavailable or failing";
             }
         } catch(const SetupError& e) { feasibility_.reset(); solver_.reset(); raw<<"\nsetup.error="<<e.what(); }
         return finish();

@@ -100,15 +100,30 @@ TEST_CASE("opt-in row scaling solves the original mixed-scale QP") {
         {1,2,{0,2},{0,1},{1,small}},{{0,5},{0,5}},{{2,2}},{}
     }));
     bool supplied_start=false;
+    bool zero_validation_tolerance=false;
     SUBCASE("cold solve") {}
     SUBCASE("source-coordinate warm start") { supplied_start=true; }
+    SUBCASE("supplied start with failed source validation") {
+        supplied_start=true;
+        zero_validation_tolerance=true;
+    }
     const auto requested=supplied_start?accepted(with_primal_start(p,Vector{2,0})):p;
     Registry<ConvexPort> registry;
     REQUIRE_FALSE(registry.add(accepted(make_highs_row_scaled_registration())));
     Requirements requirements; requirements.output.representation={"csl.program-result.v1"};
     auto [worker]=accepted(prepare_pipeline(select(registry,Method{{"csl.convex.highs.row-scaled"},{}},
                                                   requested,requirements))).create();
-    const auto result=accepted(worker->run(context()));
+    auto execution=context();
+    if(zero_validation_tolerance) execution.numerical={0,0};
+    const auto result=accepted(worker->run(execution));
+    if(zero_validation_tolerance) {
+        CHECK(result.raw_diagnostics.find("phase.qp.attempt1=optimal_but_original_checks_rejected")!=std::string::npos);
+        CHECK(result.raw_diagnostics.find("phase.qp.retry.skipped=explicit-primal-start-contract")!=std::string::npos);
+        CHECK(result.raw_diagnostics.find("optimality.withheld=original-space checks")!=std::string::npos);
+        CHECK(result.termination==Termination::numerical_failure);
+        CHECK(result.outcome.value==MathematicalOutcome::undetermined);
+        return;
+    }
     optimum(result,requested,1);
     REQUIRE(result.primal);
     CHECK(result.primal->at(0)==doctest::Approx(2));
