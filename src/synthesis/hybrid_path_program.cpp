@@ -1230,13 +1230,19 @@ HybridPortfolioProgramResult build_hybrid_portfolio_programs_for_paths(
                 "Hybrid portfolio construction stopped between edge paths; no programs were published"};
         auto built = dispatch_hybrid_path_program(adapter, system, request, path, problem,
                                                   relation_limits, policy, cancellation);
-        if (const auto *errors = std::get_if<Diagnostics>(&built))
-            return *errors;
-        if (const auto *stopped = std::get_if<OperationStopped>(&built))
-            return *stopped;
-        if (const auto *failure = std::get_if<model::HybridPathCompositionFailureReport>(&built))
-            return *failure;
-        programs.push_back(std::get<HybridPathProgram>(std::move(built)));
+        auto failure = std::visit(
+            [&](auto &&value) -> std::optional<HybridPortfolioProgramResult> {
+                using T = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<T, HybridPathProgram>) {
+                    programs.push_back(std::move(value));
+                    return std::nullopt;
+                } else {
+                    return HybridPortfolioProgramResult{std::move(value)};
+                }
+            },
+            std::move(built));
+        if (failure)
+            return std::move(*failure);
     }
     if (cancellation.stop_requested())
         return OperationStopped{StopReason::cancelled,

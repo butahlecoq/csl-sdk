@@ -2472,6 +2472,39 @@ TEST_CASE("hybrid portfolio builder returns every parallel edge branch transacti
     CHECK(diagnostic->field == "hybrid.relation.variables");
 }
 
+TEST_CASE("hybrid portfolio preserves a stop from a later path") {
+    class StoppedSecondPath final : public HybridDirectTrajectoryAdapter {
+      public:
+        HybridDirectTrajectoryCapabilities capabilities() const noexcept override {
+            return JointHDirectTrajectoryAdapter{}.capabilities();
+        }
+        mutable int calls{};
+        HybridPathProgramResult build_path(const model::HybridSystem &system,
+                                           const model::HybridRequest &request,
+                                           const model::HybridPath &path, ProblemId problem,
+                                           model::HybridRelationLimits limits,
+                                           optimization::ObjectivePolicy policy,
+                                           std::stop_token token) const override {
+            if (++calls == 2)
+                return OperationStopped{StopReason::resource_limit,
+                                        "Second path exhausted its budget"};
+            return JointHDirectTrajectoryAdapter{}.build_path(
+                system, request, path, std::move(problem), limits, policy, token);
+        }
+    } adapter;
+    auto system = example_system();
+    auto parallel = system.edges.front();
+    parallel.id = {"switch-parallel"};
+    system.edges.push_back(std::move(parallel));
+    const auto outcome = build_hybrid_portfolio_programs(
+        adapter, system, example_request(), {"hybrid-problem"}, {1, 8}, {16, 64, 1024});
+    REQUIRE(adapter.calls == 2);
+    const auto *stop = std::get_if<OperationStopped>(&outcome);
+    REQUIRE(stop);
+    CHECK(stop->reason == StopReason::resource_limit);
+    CHECK(stop->diagnostics == "Second path exhausted its budget");
+}
+
 TEST_CASE("hybrid portfolio builder dispatches through the injected direct trajectory adapter") {
     auto system = example_system();
     auto parallel = system.edges.front();
