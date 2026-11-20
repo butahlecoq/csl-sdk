@@ -74,6 +74,8 @@ int main() {
             auto vector = accepted(snapshot_vector(input));
             auto moved = std::move(matrix);
             auto moved_vector = std::move(vector);
+            // Rvalue construction copies both retaining views, so their sources remain readable.
+            // NOLINTNEXTLINE(bugprone-use-after-move)
             check(matrix, vector, {68, 161});
             producer.assign(1024, -99);
             input.clear();
