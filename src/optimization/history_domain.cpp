@@ -206,6 +206,7 @@ Diagnostics check_history_domain_memberships(const HistoryDomain &domain) {
         SetId id;
         HistorySetFamily family;
         const HistoryMembershipShape *geometry;
+        std::optional<std::size_t> projected_stage;
     };
     std::vector<SeenSetIdentity> seen_identities;
     const auto &coordinates = domain.original.coordinates;
@@ -272,8 +273,9 @@ Diagnostics check_history_domain_memberships(const HistoryDomain &domain) {
                                check_set(item.selected, expected, true);
                     } else if constexpr (std::is_same_v<T, HistoryLiftedHMembership>) {
                         return family == HistorySetFamily::polytope && original_h &&
-                               item.carrier == original_metadata->id &&
-                               valid_row_ranges(item.inequality_rows, original_h->inequalities.rows()) &&
+                               item.carrier == original_metadata->id && expected != item.carrier &&
+                               valid_row_ranges(item.inequality_rows,
+                                                original_h->inequalities.rows()) &&
                                valid_row_ranges(item.equality_rows, original_h->equalities.rows());
                     } else if constexpr (std::is_same_v<T, HistoryVSimplexMembership>) {
                         return family == HistorySetFamily::polytope &&
@@ -322,14 +324,20 @@ Diagnostics check_history_domain_memberships(const HistoryDomain &domain) {
         if (valid) {
             const auto consistent_identity = [&](const SetId &id, HistorySetFamily family,
                                                  const HistoryMembershipShape &geometry) {
+                // A lifted shape's row selection is in full-history coordinates.
+                // The stage also identifies which state block it projects onto.
+                const auto projected_stage =
+                    std::holds_alternative<HistoryLiftedHMembership>(geometry)
+                        ? std::optional{member.stage.value}
+                        : std::nullopt;
                 const auto found =
                     std::find_if(seen_identities.begin(), seen_identities.end(),
                                  [&](const SeenSetIdentity &seen) { return seen.id == id; });
                 if (found == seen_identities.end()) {
-                    seen_identities.push_back({id, family, &geometry});
+                    seen_identities.push_back({id, family, &geometry, projected_stage});
                     return true;
                 }
-                return found->family == family &&
+                return found->family == family && found->projected_stage == projected_stage &&
                        same_membership_payload(*found->geometry, geometry);
             };
             valid = consistent_identity(member.origin.selected, member.origin.selected_family,

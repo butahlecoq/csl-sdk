@@ -555,3 +555,46 @@ TEST_CASE("Lifted H membership binds selected original rows and uses the canonic
     change_geometry({{"full-history"}, {{0, 2}, {1, 2}}, {}});
     CHECK_FALSE(check_history_domain_memberships(query.domain).empty());
 }
+
+TEST_CASE("Lifted H projection identities bind their stage and differ from their carrier") {
+    using namespace optimization;
+    auto query = request();
+    query.domain.state_frame = "state";
+    const HistoryLiftedHMembership lifted{{"full-history"}, {{0, 1}}, {}};
+    const auto add_projection = [&](std::size_t stage, SetId selected, SetId reference) {
+        query.domain.memberships.push_back(
+            {{stage},
+             {reference,
+              selected,
+              HistorySetFamily::polytope,
+              SetRelation::equivalent,
+              "state",
+              {stage},
+              HistorySourceGeometry{reference, HistorySetFamily::polytope, lifted}},
+             lifted});
+    };
+
+    SUBCASE("the same stage projection can share an identity") {
+        add_projection(0, {"stage"}, {"stage"});
+        add_projection(0, {"stage"}, {"stage"});
+        CHECK(check_history_domain_memberships(query.domain).empty());
+    }
+    SUBCASE("different stage projections require different selected identities") {
+        add_projection(0, {"selected"}, {"source-0"});
+        add_projection(1, {"selected"}, {"source-1"});
+        CHECK_FALSE(check_history_domain_memberships(query.domain).empty());
+    }
+    SUBCASE("different stage projections require different source identities") {
+        add_projection(0, {"selected-0"}, {"source"});
+        add_projection(1, {"selected-1"}, {"source"});
+        CHECK_FALSE(check_history_domain_memberships(query.domain).empty());
+    }
+    SUBCASE("projection cannot claim the carrier identity") {
+        add_projection(0, {"full-history"}, {"source"});
+        CHECK_FALSE(check_history_domain_memberships(query.domain).empty());
+    }
+    SUBCASE("source projection cannot claim the carrier identity") {
+        add_projection(0, {"selected"}, {"full-history"});
+        CHECK_FALSE(check_history_domain_memberships(query.domain).empty());
+    }
+}
