@@ -40,11 +40,11 @@ double up(double x) {
 }
 
 std::optional<Interval> add(Interval a, Interval b) {
-  const double lo = a.lo + b.lo;
-  const double hi = a.hi + b.hi;
+  const double lo = down(a.lo + b.lo);
+  const double hi = up(a.hi + b.hi);
   if (!std::isfinite(lo) || !std::isfinite(hi))
     return {};
-  return Interval{down(lo), up(hi)};
+  return Interval{lo, hi};
 }
 
 std::optional<Interval> multiply(Interval a, Interval b) {
@@ -55,76 +55,54 @@ std::optional<Interval> multiply(Interval a, Interval b) {
     return {};
   const auto [minimum, maximum] =
       std::minmax_element(std::begin(products), std::end(products));
-  return Interval{down(*minimum), up(*maximum)};
+  const double lo = down(*minimum);
+  const double hi = up(*maximum);
+  if (!std::isfinite(lo) || !std::isfinite(hi))
+    return {};
+  return Interval{lo, hi};
 }
 
-// The fixed unit-upper-triangular frame and exact integer inverse:
-// Q=[1 1 0 0; 0 1 1 0; 0 0 1 1; 0 0 0 1].
-constexpr int q[4][4] = {
-    {1, 1, 0, 0}, {0, 1, 1, 0}, {0, 0, 1, 1}, {0, 0, 0, 1}};
-constexpr int qi[4][4] = {
-    {1, -1, 1, -1}, {0, 1, -1, 1}, {0, 0, 1, -1}, {0, 0, 0, 1}};
+// x = Qy, with unit superdiagonal entries within shear blocks.
+// The inverse has alternating signs from each row to the end of its block.
+// A four-state model retains the original single block.
+struct ShearFrame {
+  std::size_t dimension;
+  std::size_t block_size;
 
-std::optional<std::vector<Interval>> transform(std::span<const Interval> x,
-                                               const int matrix[4][4]) {
-  std::vector<Interval> result(4, {0.0, 0.0});
-  for (std::size_t i = 0; i < 4; ++i)
-    for (std::size_t j = 0; j < 4; ++j) {
-      if (matrix[i][j] == 0)
-        continue;
-      auto term = multiply({static_cast<double>(matrix[i][j]),
-                            static_cast<double>(matrix[i][j])},
-                           x[j]);
-      if (!term)
-        return {};
-      auto next = add(result[i], *term);
-      if (!next)
-        return {};
-      result[i] = *next;
+  std::size_t block_end(std::size_t index) const {
+    return std::min(dimension, (index / block_size + 1) * block_size);
+  }
+
+  bool has_predecessor(std::size_t column) const {
+    return column % block_size != 0;
+  }
+
+  Matrix matrix() const {
+    Matrix result{dimension, dimension, Vector(dimension * dimension)};
+    for (std::size_t row = 0; row < dimension; ++row) {
+      result.values[row * dimension + row] = 1.0;
+      if (row + 1 < block_end(row))
+        result.values[row * dimension + row + 1] = 1.0;
     }
-  return result;
+    return result;
+  }
+};
+
+double inverse_sign(std::size_t row, std::size_t column) {
+  return (column - row) % 2 == 0 ? 1.0 : -1.0;
 }
 
-template <class MatrixLike>
-std::optional<Interval> coefficient(const MatrixLike &source,
-                                    std::size_t output, std::size_t input,
-                                    const int left[4][4], const int right[4][4],
-                                    bool right_identity = false) {
+template <class Coordinate>
+std::optional<Interval> inverse_coordinate(const ShearFrame &frame,
+                                           std::size_t output,
+                                           Coordinate coordinate) {
   Interval total{0, 0};
-  for (std::size_t i = 0; i < 4; ++i)
-    for (std::size_t j = 0; j < (right_identity ? 1 : 4); ++j) {
-      const int l = left[output][i];
-      const int r = right_identity ? 1 : right[j][input];
-      if (l == 0 || r == 0)
-        continue;
-      const auto factor = l * r;
-      const auto source_col = right_identity ? input : j;
-      auto term =
-          multiply({source(i, source_col), source(i, source_col)},
-                   {static_cast<double>(factor), static_cast<double>(factor)});
-      if (!term)
-        return {};
-      auto next = add(total, *term);
-      if (!next)
-        return {};
-      total = *next;
-    }
-  return total;
-}
-
-std::optional<Interval> vector_coordinate(std::span<const double> values,
-                                          std::size_t output,
-                                          const int left[4][4]) {
-  Interval total{0, 0};
-  for (std::size_t i = 0; i < 4; ++i) {
-    if (left[output][i] == 0)
-      continue;
-    auto term = multiply({values[i], values[i]},
-                         {static_cast<double>(left[output][i]),
-                          static_cast<double>(left[output][i])});
+  for (std::size_t input = output; input < frame.block_end(output); ++input) {
+    const double sign = inverse_sign(output, input);
+    const auto term = multiply({sign, sign}, coordinate(input));
     if (!term)
       return {};
-    auto next = add(total, *term);
+    const auto next = add(total, *term);
     if (!next)
       return {};
     total = *next;
@@ -132,29 +110,69 @@ std::optional<Interval> vector_coordinate(std::span<const double> values,
   return total;
 }
 
+std::optional<std::vector<Interval>>
+transform(std::span<const Interval> x, const ShearFrame &frame) {
+  std::vector<Interval> result(frame.dimension);
+  for (std::size_t row = 0; row < frame.dimension; ++row) {
+    const auto interval =
+        inverse_coordinate(frame, row, [&](std::size_t input) {
+          return x[input];
+        });
+    if (!interval)
+      return {};
+    result[row] = *interval;
+  }
+  return result;
+}
+
+template <class MatrixLike>
+std::optional<Interval> coefficient(const MatrixLike &source,
+                                    std::size_t output, std::size_t input,
+                                    const ShearFrame &frame,
+                                    bool right_identity = false) {
+  Interval total{0, 0};
+  const std::size_t first =
+      !right_identity && frame.has_predecessor(input) ? input - 1 : input;
+  for (std::size_t i = output; i < frame.block_end(output); ++i) {
+    const double sign = inverse_sign(output, i);
+    for (std::size_t j = first; j <= input; ++j) {
+      const auto term = multiply({source(i, j), source(i, j)}, {sign, sign});
+      if (!term)
+        return {};
+      const auto next = add(total, *term);
+      if (!next)
+        return {};
+      total = *next;
+    }
+  }
+  return total;
+}
+
+
 std::variant<ParallelotopeStage, Unsupported, OperationStopped>
 set_bounds_in_frame(const sets::SetData &set, std::string field,
-                    const int matrix[4][4], const ExecutionContext &context) {
-  if (set.metadata()->set.dimension != 4)
+                    const ShearFrame &frame, const ExecutionContext &context) {
+  const auto n = frame.dimension;
+  if (set.metadata()->set.dimension != n)
     return unsupported(std::move(field),
-                       "The initial profile supports four-state sets only.");
+                       "Initial set dimension differs from the model.");
   ParallelotopeStage result{
-      Vector(4, std::numeric_limits<double>::infinity()),
-      Vector(4, -std::numeric_limits<double>::infinity())};
+      Vector(n, std::numeric_limits<double>::infinity()),
+      Vector(n, -std::numeric_limits<double>::infinity())};
   const auto repr = set.representation();
   if (const auto *singleton =
           std::get_if<sets::SingletonRepresentation>(&repr)) {
-    std::vector<Interval> point(4);
-    for (std::size_t i = 0; i < 4; ++i) {
+    std::vector<Interval> point(n);
+    for (std::size_t i = 0; i < n; ++i) {
       if (!std::isfinite(singleton->point[i]))
         return unsupported(std::move(field), "Set coordinates must be finite.");
       point[i] = {singleton->point[i], singleton->point[i]};
     }
-    const auto transformed = transform(point, matrix);
+    const auto transformed = transform(point, frame);
     if (!transformed)
       return OperationStopped{StopReason::numerical_failure,
                               "Input transform overflowed."};
-    for (std::size_t i = 0; i < 4; ++i) {
+    for (std::size_t i = 0; i < n; ++i) {
       result.lower[i] = (*transformed)[i].lo;
       result.upper[i] = (*transformed)[i].hi;
     }
@@ -167,18 +185,18 @@ set_bounds_in_frame(const sets::SetData &set, std::string field,
   for (std::size_t row = 0; row < vertices->vertices.rows(); ++row) {
     if (const auto stop = stop_if_needed(context))
       return *stop;
-    std::vector<Interval> point(4);
-    for (std::size_t j = 0; j < 4; ++j) {
+    std::vector<Interval> point(n);
+    for (std::size_t j = 0; j < n; ++j) {
       const double value = vertices->vertices(row, j);
       if (!std::isfinite(value))
         return unsupported(std::move(field), "Set coordinates must be finite.");
       point[j] = {value, value};
     }
-    const auto transformed = transform(point, matrix);
+    const auto transformed = transform(point, frame);
     if (!transformed)
       return OperationStopped{StopReason::numerical_failure,
                               "Input transform overflowed."};
-    for (std::size_t i = 0; i < 4; ++i) {
+    for (std::size_t i = 0; i < n; ++i) {
       result.lower[i] = std::min(result.lower[i], (*transformed)[i].lo);
       result.upper[i] = std::max(result.upper[i], (*transformed)[i].hi);
     }
@@ -226,8 +244,34 @@ coordinate_bounds(const sets::SetData &set, const ExecutionContext &context) {
   return result;
 }
 
+std::pair<double, double> pair_shear_activities(
+    const ParallelotopeStage &stage, std::span<const double> normal) {
+  constexpr double inf = std::numeric_limits<double>::infinity();
+  Interval total{0.0, 0.0};
+  for (std::size_t col = 0; col < normal.size(); ++col) {
+    const double current = normal[col];
+    const double previous = col % 2 == 0 ? 0.0 : normal[col - 1];
+    if (current == -previous)
+      continue;
+    const auto coefficient = add({current, current}, {previous, previous});
+    if (!coefficient)
+      return {-inf, inf};
+    const auto term =
+        multiply(*coefficient, {stage.lower[col], stage.upper[col]});
+    if (!term)
+      return {-inf, inf};
+    const auto updated = add(total, *term);
+    if (!updated)
+      return {-inf, inf};
+    total = *updated;
+  }
+  return {total.lo, total.hi};
+}
+
 auto parallelotope_support(const Matrix& frame, const ParallelotopeStage& stage) {
   return [&frame, &stage](std::span<const double> normal) {
+    if (frame.rows != 2 && frame.rows != 4)
+      return pair_shear_activities(stage, normal);
     long double lower = 0.0L, upper = 0.0L;
     for (std::size_t col = 0; col < frame.cols; ++col) {
       long double coefficient_value = 0.0L;
@@ -328,26 +372,26 @@ finite_plan_parallelotope(const FixedPlanRequest &request,
     return *stopped;
   if (request.system.dimensions().state == 2)
     return parallelotope_planar(request, context);
-  constexpr std::size_t n = 4;
+  constexpr std::size_t max_states = 64;
+  const auto n = request.system.dimensions().state;
   const auto horizon = request.system.horizon();
-  if (request.system.dimensions().state != n ||
+  if (n < 3 || n > max_states ||
       !detail::has_fixed_plan_horizon_shape(request))
     return unsupported("finite_plan_parallelotope.dimensions",
-                       "The four-state model and horizon fields must agree.");
+                       "The profile requires matching horizon fields with "
+                       "3 to 64 states.");
   if (!detail::fixed_plan_safe_dimensions_match_model(request))
     return unsupported("finite_plan_parallelotope.safe_sets",
                        "State-constraint dimension differs from model.");
+  const ShearFrame frame{n, n == 4 ? std::size_t{4} : std::size_t{2}};
   auto initial = set_bounds_in_frame(
-      request.initial, "finite_plan_parallelotope.initial", qi, context);
+      request.initial, "finite_plan_parallelotope.initial", frame, context);
   if (const auto *error = std::get_if<Unsupported>(&initial))
     return *error;
   if (const auto *stopped = std::get_if<OperationStopped>(&initial))
     return *stopped;
-  FinitePlanParallelotopeTrace trace{
-      Matrix{4, 4, Vector(16, 0.0)}, {}, Assurance::numerical};
-  for (std::size_t i = 0; i < 4; ++i)
-    for (std::size_t j = 0; j < 4; ++j)
-      trace.frame.values[i * 4 + j] = static_cast<double>(q[i][j]);
+  FinitePlanParallelotopeTrace trace{frame.matrix(), {},
+                                   Assurance::numerical};
   trace.stages.push_back(std::get<ParallelotopeStage>(std::move(initial)));
   if (!detail::outer_set_inside(request.admissible_states.front(), n,
           parallelotope_support(trace.frame, trace.stages.front())))
@@ -366,54 +410,55 @@ finite_plan_parallelotope(const FixedPlanRequest &request,
     if (const auto *error = std::get_if<Diagnostic>(&dyn))
       return unsupported(error->field, error->explanation);
     const auto &d = std::get<model::DynamicsStage>(dyn);
-    if (d.A.rows() != 4 || d.A.cols() != 4 || d.B.rows() != 4 ||
-        d.E.rows() != 4 || d.offset.size() != 4 ||
+    if (d.A.rows() != n || d.A.cols() != n || d.B.rows() != n ||
+        d.E.rows() != n || d.offset.size() != n ||
         request.controls[k].size() != d.B.cols())
       return unsupported(
           "finite_plan_parallelotope.stage.dimension",
-          "Dynamics dimensions differ from the four-state profile.");
-    std::vector<Interval> current(4);
+          "Dynamics dimensions differ from the model.");
+    std::vector<Interval> current(n);
     const auto &previous = trace.stages.back();
-    for (std::size_t j = 0; j < 4; ++j)
+    for (std::size_t j = 0; j < n; ++j)
       current[j] = {previous.lower[j], previous.upper[j]};
 
     // y' = Q^-1 (A Q y + Bv + Ew + c). Enclose every coefficient transform.
     if (request.disturbances[k].metadata()->set.dimension != d.E.cols())
       return unsupported("finite_plan_parallelotope.stage.dimension",
-                         "Dynamics and disturbance dimensions differ from the "
-                         "four-state profile.");
-    std::vector<std::vector<Interval>> mapped(4, std::vector<Interval>(4));
+                         "Dynamics and disturbance dimensions differ.");
+    std::vector<std::vector<Interval>> mapped(n, std::vector<Interval>(n));
     std::vector<std::vector<Interval>> control_map(
-        4, std::vector<Interval>(d.B.cols()));
+        n, std::vector<Interval>(d.B.cols()));
     std::vector<std::vector<Interval>> disturbance_map(
-        4, std::vector<Interval>(d.E.cols()));
-    for (std::size_t i = 0; i < 4; ++i) {
-      for (std::size_t j = 0; j < 4; ++j) {
-        const auto m = coefficient(d.A, i, j, qi, q);
+        n, std::vector<Interval>(d.E.cols()));
+    for (std::size_t i = 0; i < n; ++i) {
+      if (const auto stop = stop_if_needed(context))
+        return *stop;
+      for (std::size_t j = 0; j < n; ++j) {
+        const auto m = coefficient(d.A, i, j, frame);
         if (!m)
           return OperationStopped{StopReason::numerical_failure,
                                   "Dynamics transform overflowed."};
         mapped[i][j] = *m;
       }
       for (std::size_t t = 0; t < d.E.cols(); ++t) {
-        const auto e = coefficient(d.E, i, t, qi, q, true);
+        const auto e = coefficient(d.E, i, t, frame, true);
         if (!e)
           return OperationStopped{StopReason::numerical_failure,
                                   "Disturbance transform overflowed."};
         disturbance_map[i][t] = *e;
       }
       for (std::size_t c = 0; c < d.B.cols(); ++c) {
-        const auto b = coefficient(d.B, i, c, qi, q, true);
+        const auto b = coefficient(d.B, i, c, frame, true);
         if (!b)
           return OperationStopped{StopReason::numerical_failure,
                                   "Control transform overflowed."};
         control_map[i][c] = *b;
       }
     }
-    ParallelotopeStage next{Vector(4), Vector(4)};
-    for (std::size_t i = 0; i < 4; ++i) {
+    ParallelotopeStage next{Vector(n), Vector(n)};
+    for (std::size_t i = 0; i < n; ++i) {
       Interval image{0, 0};
-      for (std::size_t j = 0; j < 4; ++j) {
+      for (std::size_t j = 0; j < n; ++j) {
         auto term = multiply(mapped[i][j], current[j]);
         if (!term)
           return OperationStopped{StopReason::numerical_failure,
@@ -424,7 +469,9 @@ finite_plan_parallelotope(const FixedPlanRequest &request,
                                   "State propagation overflowed."};
         image = *sum;
       }
-      auto offset = vector_coordinate(d.offset.values(), i, qi);
+      auto offset = inverse_coordinate(frame, i, [&](std::size_t col) {
+        return Interval{d.offset[col], d.offset[col]};
+      });
       if (!offset)
         return OperationStopped{StopReason::numerical_failure,
                                 "Offset transform overflowed."};

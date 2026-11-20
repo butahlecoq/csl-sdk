@@ -1,11 +1,13 @@
 #include <csl/optimization/finite_action_parallelotope_minimax.hpp>
 
+#include "exact_dyadic_sum.hpp"
 #include "finite_action_plans.hpp"
 #include "finite_action_replay.hpp"
 
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <string>
 
 namespace csl::optimization {
@@ -32,29 +34,130 @@ struct CornerScore {
 using CornerScoreOutcome =
     std::variant<CornerScore, Unsupported, OperationStopped>;
 
+std::optional<OperationStopped> scoring_stop(const ExecutionContext &context) {
+  if (context.cancellation.stop_requested())
+    return OperationStopped{StopReason::cancelled,
+                            "Parallelotope candidate scoring cancelled."};
+  if (context.deadline && std::chrono::steady_clock::now() >= *context.deadline)
+    return OperationStopped{StopReason::deadline_expired,
+                            "Parallelotope candidate scoring deadline expired."};
+  return {};
+}
+
+CornerScoreOutcome score_point(const Objective &objective, const Vector &point) {
+  const auto value = evaluate(objective, point);
+  if (const auto *error = std::get_if<Diagnostic>(&value))
+    return unsupported(error->field, error->explanation);
+  if (const auto *stop = std::get_if<OperationStopped>(&value))
+    return *stop;
+  return CornerScore{std::get<double>(value), 1};
+}
+
+// Double the block's objective value to remove the one-half. The cross
+// products and linear terms are added twice rather than rounding 2*q or
+// replacing the physical coordinate a+b with its rounded binary64 value.
+detail::ExactTripleSum pair_objective(const QuadraticCoefficients &quadratic,
+                                      std::size_t row, double a, double b,
+                                      bool paired) {
+  detail::ExactTripleSum result;
+  const double weight = quadratic.Q(row, row);
+  result.add_triple(weight, a, a);
+  for (int term = 0; term < 2; ++term)
+    result.add_product(quadratic.linear[row], a);
+  if (paired) {
+    result.add_triple(weight, b, b);
+    result.add_triple(quadratic.Q(row + 1, row + 1), b, b);
+    for (int term = 0; term < 2; ++term) {
+      result.add_triple(weight, a, b);
+      result.add_product(quadratic.linear[row], b);
+      result.add_product(quadratic.linear[row + 1], b);
+    }
+  }
+  return result;
+}
+
+CornerScoreOutcome
+score_pair_shears(const reachability::ParallelotopeStage &terminal,
+                  const Matrix &frame, const Objective &objective,
+                  const ExecutionContext &context) {
+  const auto coefficients = objective.coefficients();
+  const auto *quadratic = std::get_if<QuadraticCoefficients>(&coefficients);
+  if (!quadratic)
+    return unsupported("finite_parallelotope_minimax.corners",
+                       "Large terminal frames require a diagonal convex quadratic.");
+  const auto n = frame.rows;
+  for (std::size_t row = 0; row < n; ++row) {
+    if (const auto stop = scoring_stop(context))
+      return *stop;
+    if (!std::isfinite(terminal.lower[row]) ||
+        !std::isfinite(terminal.upper[row]) ||
+        terminal.lower[row] > terminal.upper[row])
+      return unsupported("finite_parallelotope_minimax.terminal",
+                         "Terminal frame bounds must be finite and ordered.");
+    for (std::size_t col = 0; col < n; ++col) {
+      const bool in_shear = row % 2 == 0 && col == row + 1;
+      if (frame.values[row * n + col] != (row == col || in_shear ? 1.0 : 0.0))
+        return unsupported("finite_parallelotope_minimax.terminal",
+                           "Large terminal frames require adjacent-pair shears.");
+      const double q = quadratic->Q(row, col);
+      if (row == col ? q < 0.0 : q != 0.0)
+        return unsupported("finite_parallelotope_minimax.corners",
+                           "Large terminal frames require a diagonal convex quadratic.");
+    }
+  }
+
+  Vector point(n);
+  for (std::size_t row = 0; row < n; row += 2) {
+    if (const auto stop = scoring_stop(context))
+      return *stop;
+    const bool paired = row + 1 < n;
+    detail::ExactTripleSum best;
+    const unsigned count = paired ? 4 : 2;
+    for (unsigned mask = 0; mask < count; ++mask) {
+      const double a = (mask & 1) ? terminal.upper[row] : terminal.lower[row];
+      double b = 0.0;
+      if (paired)
+        b = (mask & 2) ? terminal.upper[row + 1] : terminal.lower[row + 1];
+      const double coordinate = a + b;
+      if (!std::isfinite(coordinate))
+        return unsupported("finite_parallelotope_minimax.score",
+                           "Frame corner transform is nonfinite.");
+      auto value = pair_objective(*quadratic, row, a, b, paired);
+      auto difference = value;
+      difference.add_sum(best, true);
+      if (mask == 0 || difference.positive()) {
+        best = std::move(value);
+        point[row] = coordinate;
+        if (paired)
+          point[row + 1] = b;
+      }
+    }
+  }
+  return score_point(objective, point);
+}
+
+
+
 CornerScoreOutcome
 score_corners(const reachability::ParallelotopeStage &terminal,
               const Matrix &frame, const Objective &objective,
               const ExecutionContext &context) {
   const auto dimension = terminal.lower.size();
-  if (dimension == 0 || dimension >= std::numeric_limits<std::size_t>::digits ||
+  if (dimension == 0 || dimension > 64 ||
       terminal.upper.size() != dimension ||
       frame.rows != dimension ||
       frame.cols != dimension || frame.values.size() != dimension * dimension)
     return unsupported(
         "finite_parallelotope_minimax.terminal",
         "Terminal frame box or frame dimensions are inconsistent.");
+  constexpr std::size_t max_exhaustive_dimension = 8;
+  if (dimension > max_exhaustive_dimension)
+    return score_pair_shears(terminal, frame, objective, context);
   double maximum = -std::numeric_limits<double>::infinity();
   const std::size_t count = std::size_t{1} << dimension;
   for (std::size_t mask = 0; mask < count; ++mask) {
-    if (context.cancellation.stop_requested())
-      return OperationStopped{StopReason::cancelled,
-                              "Parallelotope candidate scoring cancelled."};
-    if (context.deadline &&
-        std::chrono::steady_clock::now() >= *context.deadline)
-      return OperationStopped{
-          StopReason::deadline_expired,
-          "Parallelotope candidate scoring deadline expired."};
+    if (const auto stop = scoring_stop(context))
+      return *stop;
     Vector point(dimension);
     for (std::size_t row = 0; row < dimension; ++row) {
       double coordinate = 0.0;
@@ -69,12 +172,12 @@ score_corners(const reachability::ParallelotopeStage &terminal,
                            "Frame corner transform is nonfinite.");
       point[row] = coordinate;
     }
-    const auto value = evaluate(objective, point);
-    if (const auto *error = std::get_if<Diagnostic>(&value))
-      return unsupported(error->field, error->explanation);
-    if (const auto *stop = std::get_if<OperationStopped>(&value))
+    const auto score = score_point(objective, point);
+    if (const auto *error = std::get_if<Unsupported>(&score))
+      return *error;
+    if (const auto *stop = std::get_if<OperationStopped>(&score))
       return *stop;
-    maximum = std::max(maximum, std::get<double>(value));
+    maximum = std::max(maximum, std::get<CornerScore>(score).maximum);
   }
   if (!std::isfinite(maximum))
     return unsupported("finite_parallelotope_minimax.score",
