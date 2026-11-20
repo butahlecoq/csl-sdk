@@ -865,6 +865,50 @@ TEST_CASE("Strategy A retains the feasible preimage for a source-cost request") 
     CHECK(result.incumbents.front().witness.controls.size() == 2);
 }
 
+TEST_CASE("Lifted Strategy A retains a feasible history without eliminating state coordinates") {
+    auto query = request(integrator());
+    query.family.profile = synthesis::strategy_a::lifted_nominal_profile;
+    query.configuration.history_optimizer = {"test.zero-history-optimizer"};
+    query.history_optimization =
+        std::make_shared<const optimization::StrategyHistoryOptimizationProfile>(
+            optimization::StrategyHistoryOptimizationProfile{
+                ProgramId{"strategy-a-lifted-history"}, {{}, 0, {}}, 0, "state",
+                typed_history_memberships(), optimization::ColdStart{}});
+    auto admitted = admit(query, false, {}, false, false, false, nullptr, nullptr, false,
+                          false, false, false, zero_history_optimizer());
+    REQUIRE(std::holds_alternative<PreparedStrategy>(admitted));
+
+    ExecutionContext context;
+    context.resources = std::make_shared<const ResourcePolicy>(ResourcePolicy{1, 1, 1, {}});
+    const auto result = take(std::get<PreparedStrategy>(admitted).create()->run(context));
+    REQUIRE(result.termination == Termination::completed);
+    REQUIRE(result.history_optimization);
+    REQUIRE(result.history_optimization->result);
+    CHECK(result.history_optimization->result->membership_witnesses.size() == 6);
+    REQUIRE(result.family);
+    const auto &candidate = std::get<CandidateFamily>(result.family->outcome());
+    REQUIRE(candidate.relation.payload->h_relation_for_recording());
+    CHECK(candidate.relation.payload->h_relation_for_recording()->metadata()->set.dimension == 5);
+    const auto payload = std::dynamic_pointer_cast<const synthesis::strategy_a::LiftedCandidateHistory>(
+        candidate.relation.payload);
+    REQUIRE(payload);
+    const auto &prefixes = payload->projections.prefixes;
+    REQUIRE(prefixes.size() == 3);
+    for (std::size_t stage = 0; stage < prefixes.size(); ++stage) {
+        CAPTURE(stage);
+        CHECK(prefixes[stage].stage.value == stage);
+        CHECK(prefixes[stage].state_columns.begin == stage);
+        CHECK(prefixes[stage].state_columns.end == stage + 1);
+    }
+    CHECK(result.family->identity().lineage.size() == 1);
+    CHECK(result.family->identity().lineage.front().module ==
+          ModuleId{"csl.synthesis.lifted-history-projection"});
+
+    query.history_optimization.reset();
+    query.configuration.history_optimizer = {};
+    CHECK(std::holds_alternative<Rejection>(admit(query)));
+}
+
 TEST_CASE("Strategy A runs source-index hulls in a 2D control tube and selects a separate terminal optimizer") {
     auto problem=planar_control_problem();
     const auto request_=request(problem);
