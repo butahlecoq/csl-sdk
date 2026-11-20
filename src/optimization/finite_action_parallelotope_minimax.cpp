@@ -44,6 +44,10 @@ score_corners(const reachability::ParallelotopeStage &terminal,
     return unsupported(
         "finite_parallelotope_minimax.terminal",
         "Terminal frame box or frame dimensions are inconsistent.");
+  constexpr std::size_t max_exhaustive_dimension = 8;
+  if (dimension > max_exhaustive_dimension)
+      return unsupported("finite_parallelotope_minimax.corners",
+                         "Exhaustive terminal corner scoring supports up to eight states.");
   double maximum = -std::numeric_limits<double>::infinity();
   const std::size_t count = std::size_t{1} << dimension;
   for (std::size_t mask = 0; mask < count; ++mask) {

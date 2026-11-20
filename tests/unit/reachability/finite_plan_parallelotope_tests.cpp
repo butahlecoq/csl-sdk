@@ -57,6 +57,68 @@ sets::SetData wide_four_state_domain() {
 }
 } // namespace
 
+TEST_CASE("pair shears enclose fixed-plan reachable points in three and 48 states") {
+    std::size_t n = 3;
+    SUBCASE("odd dimension with one unsheared coordinate") {}
+    SUBCASE("large even dimension") { n = 48; }
+
+    Matrix a{n, n, Vector(n * n, 0.0)};
+    Matrix b{n, 1, Vector(n)};
+    Matrix e{n, 1, Vector(n)};
+    Vector c(n);
+    Vector vertices(2 * n);
+    for (std::size_t row = 0; row < n; ++row) {
+        a.values[row * n + row] = 0.5;
+        a.values[row * n + (row + 2) % n] += 0.25;
+        b.values[row] = row % 2 == 0 ? -0.5 : 0.25;
+        e.values[row] = row % 2 == 0 ? 0.75 : -0.5;
+        c[row] = static_cast<double>(row) / 8.0;
+        vertices[row] = -0.5;
+        vertices[n + row] = static_cast<double>(row % 5) / 4.0;
+    }
+    const SystemModel model{{{n, 1, 1}, TimeDomain::discrete, LinearStage{a, b, e, c}}, {}};
+    const auto system = take(csl::model::snapshot(model, Vector{0, 1}));
+    const auto initial = take(
+        sets::make_v({{"paired-initial"}, n, {}}, {take(numeric::snapshot(Matrix{2, n, vertices})),
+                                                   take(numeric::snapshot(Matrix{0, n, {}}))}));
+    const auto disturbance = take(sets::make_v({{"paired-disturbance"}, 1, {}},
+                                               {take(numeric::snapshot(Matrix{2, 1, {-0.5, 0.75}})),
+                                                take(numeric::snapshot(Matrix{0, 1, {}}))}));
+    const auto domain = take(sets::make_universal({{"paired-domain"}, n, {}}));
+    const Vector action{0.25};
+    const FixedPlanRequest request{system,        initial,          {action},
+                                   {disturbance}, {domain, domain}, {"paired-parallelotope"}};
+    const auto result = finite_plan_parallelotope(request);
+    REQUIRE(std::holds_alternative<FinitePlanParallelotopeTrace>(result));
+    const auto &trace = std::get<FinitePlanParallelotopeTrace>(result);
+    REQUIRE(trace.frame.rows == n);
+    REQUIRE(trace.frame.cols == n);
+    REQUIRE(trace.stages.size() == 2);
+    for (std::size_t row = 0; row < n; ++row) {
+        for (std::size_t col = 0; col < n; ++col) {
+            CHECK(trace.frame.values[row * n + col] ==
+                  (row == col || (row % 2 == 0 && col == row + 1) ? 1.0 : 0.0));
+        }
+        CHECK(trace.stages[1].lower[row] < trace.stages[1].upper[row]);
+    }
+
+    for (const std::size_t offset : {std::size_t{0}, n}) {
+        const auto first = vertices.begin() + static_cast<std::ptrdiff_t>(offset);
+        const Vector x(first, first + static_cast<std::ptrdiff_t>(n));
+        for (const double w : {-0.5, 0.75}) {
+            const auto step = system.step({0}, x, action, Vector{w});
+            REQUIRE(std::holds_alternative<Vector>(step));
+            const auto &next = std::get<Vector>(step);
+            for (std::size_t row = 0; row < n; ++row) {
+                const double y =
+                    row % 2 == 0 && row + 1 < n ? next[row] - next[row + 1] : next[row];
+                CHECK(trace.stages[1].lower[row] <= y);
+                CHECK(trace.stages[1].upper[row] >= y);
+            }
+        }
+    }
+}
+
 TEST_CASE(
     "fixed non-axis frame encloses every finite TwoPoints reachable state") {
   const auto request = two_points_request();

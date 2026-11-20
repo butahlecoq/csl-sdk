@@ -79,9 +79,8 @@ using FiniteActionParallelotopeMinimaxOutcome =
                  OperationStopped>;
 
 // Ranks fixed open-loop plans by numerical maxima over all corners of the
-// terminal fixed-frame box, then replays the selected plan over finite
-// catalogs. Candidate scores are enclosure estimates, not bounds or optimality
-// claims.
+// terminal fixed-frame box for up to eight states. It then replays the
+// selected plan over finite catalogs. Scores are numerical enclosure estimates.
 FiniteActionParallelotopeMinimaxOutcome finite_action_parallelotope_minimax(
     const FiniteActionMinimaxRequest &request,
     FiniteActionParallelotopeMinimaxLimits limits,
