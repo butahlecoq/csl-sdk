@@ -15,4 +15,8 @@ struct CasadiHistoryScaling {
 // be finite and positive. Starts, objective, and outputs use canonical units.
 registry::Registration<registry::HistoryOptimizerPort>
     make_casadi_scaled_history_optimizer_registration(CasadiHistoryScaling);
+// Enable IPOPT's MUMPS equality dependency detector with right-hand-side
+// checking. This numerical policy retains the original history for validation.
+registry::Registration<registry::HistoryOptimizerPort>
+    make_casadi_mumps_history_optimizer_registration(std::optional<CasadiHistoryScaling> = {});
 } // namespace csl::adapters::nlp
