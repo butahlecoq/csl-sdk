@@ -36,9 +36,9 @@ DOCTEST_RUNTIME_FIX = (
 
 
 PROFILE_OPTIONS = {
-    "core": (False, False, False),
-    "highs": (True, True, False),
-    "casadi": (False, False, True),
+    "core": (False, False, False, False),
+    "highs": (True, True, False, True),
+    "casadi": (False, False, True, False),
 }
 
 
@@ -245,12 +245,15 @@ def profile_manifest(build: Path, source: Corpus) -> tuple[str, dict[str, str]]:
         cache.get("CMAKE_GENERATOR") == manifest.get("generator") == "Ninja",
         "Native quality requires actual Ninja dependency records",
     )
-    options = tuple(enabled(string_value(manifest.get(k), k)) for k in ("highs", "qhull", "casadi"))
+    options = tuple(
+        enabled(string_value(manifest.get(k), k)) for k in ("highs", "qhull", "casadi", "ipopt")
+    )
     require(options == PROFILE_OPTIONS[name], f"{name} has incorrect native adapter options")
     for field, variable in [
         ("highs", "CSL_ENABLE_HIGHS"),
         ("qhull", "CSL_ENABLE_QHULL"),
         ("casadi", "CSL_ENABLE_CASADI"),
+        ("ipopt", "CSL_ENABLE_IPOPT"),
         ("testing", "BUILD_TESTING"),
     ]:
         require(
@@ -672,7 +675,7 @@ def coverage(receipts: list[dict[str, object]], source: Corpus) -> dict[str, obj
             values.update(string_value(v, field) for v in list_value(receipt.get(field), field))
     require(
         profiles == set(PROFILE_OPTIONS),
-        "Native coverage requires core, HiGHS+Qhull, and CasADi profile receipts",
+        "Native coverage requires core, HiGHS+Qhull+Ipopt, and CasADi profile receipts",
     )
     for label, required, field in [
         ("translation unit", source.sources, "checked_sources"),

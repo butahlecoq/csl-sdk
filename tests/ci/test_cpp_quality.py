@@ -65,6 +65,7 @@ class NativeQualityBoundaryTests(unittest.TestCase):
             "highs": "OFF",
             "qhull": "OFF",
             "casadi": "OFF",
+            "ipopt": "OFF",
             "testing": "ON",
             "inputs_sha256": inputs,
             "public_header_contexts": {
@@ -81,6 +82,7 @@ class NativeQualityBoundaryTests(unittest.TestCase):
             "CSL_ENABLE_HIGHS:BOOL=OFF\n"
             "CSL_ENABLE_QHULL:BOOL=OFF\n"
             "CSL_ENABLE_CASADI:BOOL=OFF\n"
+            "CSL_ENABLE_IPOPT:BOOL=OFF\n"
             "BUILD_TESTING:BOOL=ON\n"
         )
         return manifest
@@ -176,6 +178,15 @@ class NativeQualityBoundaryTests(unittest.TestCase):
         manifest["profile"] = "highs"
         (self.build / "cpp-quality-profile.json").write_text(json.dumps(manifest))
         with self.assertRaisesRegex(ValueError, "declared owner"):
+            quality.profile_manifest(self.build, quality.corpus(self.root))
+
+    def test_profile_rejects_a_different_ipopt_cache_value(self) -> None:
+        self.save_profile()
+        cache = self.build / "CMakeCache.txt"
+        cache.write_text(
+            cache.read_text().replace("CSL_ENABLE_IPOPT:BOOL=OFF", "CSL_ENABLE_IPOPT:BOOL=ON")
+        )
+        with self.assertRaisesRegex(ValueError, "Profile/cache mismatch: CSL_ENABLE_IPOPT"):
             quality.profile_manifest(self.build, quality.corpus(self.root))
 
     def test_unknown_first_party_dependency_cannot_disappear(self) -> None:

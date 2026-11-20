@@ -49,14 +49,17 @@ jobs:
             highs: 'OFF'
             qhull: 'OFF'
             casadi: 'OFF'
+            ipopt: 'OFF'
           - profile: highs
             highs: 'ON'
             qhull: 'ON'
             casadi: 'OFF'
+            ipopt: 'ON'
           - profile: casadi
             highs: 'OFF'
             qhull: 'OFF'
             casadi: 'ON'
+            ipopt: 'OFF'
     env:
       OPENBLAS_NUM_THREADS: '1'
       OMP_NUM_THREADS: '1'
@@ -73,7 +76,7 @@ jobs:
           python-version: '3.11.14'
       - name: Install pinned development and native-client dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-cpp-quality.txt casadi==3.8.0
-      - name: Locate the actual native CasADi package
+      - name: Locate the pinned CasADi and Ipopt libraries
         run: |
           python - <<'PY'
           import os
@@ -93,6 +96,7 @@ jobs:
           -DCSL_CPP_QUALITY=ON -DCSL_CPP_QUALITY_PROFILE=${{ matrix.profile }}
           -DCSL_ENABLE_HIGHS=${{ matrix.highs }} -DCSL_ENABLE_QHULL=${{ matrix.qhull }}
           -DCSL_ENABLE_CASADI=${{ matrix.casadi }} -Dcasadi_DIR="$CASADI_CMAKE_DIR"
+          -DCSL_ENABLE_IPOPT=${{ matrix.ipopt }} -DIpopt_ROOT="$(dirname "$CASADI_CMAKE_DIR")"
           -DPython3_EXECUTABLE="$(command -v python)"
       - name: Build the complete real profile serially
         run: cmake --build "$BUILD_ROOT" --parallel 1
