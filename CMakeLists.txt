@@ -14,6 +14,22 @@ option(CSL_DEPENDENCY_PROBES "Build the isolated pinned native dependency probes
 
 option(CSL_BUILD_NOMINAL_TUBE_CAPTURE "Build the source-bound closed-H nominal tube capture tool" OFF)
 option(CSL_ENABLE_CASADI "Build the optional native C++ CasADi/IPOPT history optimizers" OFF)
+option(CSL_ENABLE_IPOPT "Build the optional native Ipopt convex provider" OFF)
+if(CSL_ENABLE_IPOPT)
+  block(SCOPE_FOR VARIABLES)
+    list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+    find_package(Ipopt 3.14.19 EXACT MODULE REQUIRED)
+    include(CheckCXXSourceCompiles)
+    set(CMAKE_REQUIRED_LIBRARIES Ipopt::Ipopt)
+    unset(CSL_IPOPT_C_LINKS CACHE)
+    check_cxx_source_compiles("#include <IpStdCInterface.h>
+int main() { ipindex major{}, minor{}, patch{}; GetIpoptVersion(&major, &minor, &patch); }"
+      CSL_IPOPT_C_LINKS)
+    if(NOT CSL_IPOPT_C_LINKS)
+      message(FATAL_ERROR "The discovered Ipopt C interface does not link with this CSL toolchain.")
+    endif()
+  endblock()
+endif()
 option(CSL_BUILD_HISTORY_MEMBERSHIP_2D_EXAMPLE "Build the source-cost history membership 2D example" OFF)
 if(CSL_ENABLE_CASADI)
   include(cmake/CasadiDependencies.cmake)
@@ -33,7 +49,7 @@ include(cmake/JsonDependencies.cmake)
 # Include module-owned declarations in the project scope so dependency pins and
 # package state remain shared. The same order is used for focused test ownership.
 set(csl_modules contracts numeric optimization registry sets model geometry problem controllers
-  reachability synthesis verification simulation input execution artifacts adapters/highs adapters/polyhedral application experiments)
+  reachability synthesis verification simulation input execution artifacts adapters/highs adapters/ipopt adapters/polyhedral application experiments)
 foreach(module IN LISTS csl_modules)
   include(src/${module}/Module.cmake)
 endforeach()
