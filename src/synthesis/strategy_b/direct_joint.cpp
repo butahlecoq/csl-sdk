@@ -1657,8 +1657,8 @@ registry::StrategyRegistration make_registration(
                                  const registry::Requirements &)
                                  -> std::unique_ptr<SynthesisWorkspace> {
                                  return std::make_unique<detail::DirectJointExecutionRunner>(
-                                     std::get<0>(std::move(providers)),
-                                     std::get<1>(std::move(providers)), prepared, selected_verifier,
+                                     std::move(std::get<0>(providers)),
+                                     std::move(std::get<1>(providers)), prepared, selected_verifier,
                                      history_optimizer);
                              });
                      },
