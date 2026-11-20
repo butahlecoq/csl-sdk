@@ -1233,6 +1233,49 @@ TEST_CASE("Lifted Strategy A retains a feasible history without eliminating stat
     CHECK(std::holds_alternative<Rejection>(admit(query)));
 }
 
+TEST_CASE("Strategy A can project a thin forward step from its joint H factor") {
+    const auto controls = bounded_box_2d("projected-controls", "u", "v", 0, 1, 0, 1);
+    Problem input{{"projected-thin-forward"},
+                  std::make_shared<const SystemModel>(
+                      SystemModel{{{4, 2, 0},
+                                   TimeDomain::discrete,
+                                   LinearStage{Matrix{4, 4, Vector(16, 0)},
+                                               Matrix{4, 2, {1, 0, 0, 1, 0.25, 0.5, 0.75, 0.125}},
+                                               Matrix{4, 0, {}}, Vector{8, 2, 1, 0}}},
+                                  {}}),
+                  {0, 1},
+                  KnownInitial{{0, 0, 0, 0}},
+                  ContinuousDomain{{controls}},
+                  {UniversalSet{4}, UniversalSet{4}},
+                  {},
+                  {},
+                  InformationPattern::nominal_open_loop,
+                  LinearTerminal{{-1, 0, 0, 0}, 0}};
+    auto query = request(take(
+        problem::resolve(input, {problem::UncertaintyStructure::stage_product_uncoupled, {}, {}})));
+    query.family.profile = synthesis::strategy_a::projected_nominal_profile;
+    auto admitted = admit(query);
+    REQUIRE(std::holds_alternative<PreparedStrategy>(admitted));
+    ExecutionContext context;
+    context.resources = std::make_shared<const ResourcePolicy>(ResourcePolicy{1, 1, 1, {}});
+    const auto result =
+        take(std::get<PreparedStrategy>(std::move(admitted)).create()->run(context));
+    REQUIRE(result.termination == Termination::completed);
+    const auto &candidate = payload(result);
+    REQUIRE(candidate.forward.stages.size() == 2);
+    const auto &last = candidate.forward.stages.back();
+    CHECK(last.joint_factor.id == last.propagation_factor.id);
+    CHECK(last.joint_factor.metadata.dimension == 10);
+    CHECK(last.marginal.output.metadata.dimension == 4);
+    CHECK(std::none_of(last.providers.begin(), last.providers.end(), [](const auto &provider) {
+        return provider.actual_module && provider.actual_module->value == "csl.conversion.qhull";
+    }));
+    REQUIRE(candidate.terminal);
+    REQUIRE(candidate.terminal->optimization);
+    REQUIRE(candidate.terminal->optimization->primal);
+    CHECK(candidate.terminal->optimization->primal->front() == doctest::Approx(9));
+}
+
 TEST_CASE(
     "Strategy A runs source-index hulls in a 2D control tube and selects a separate terminal optimizer") {
     auto problem = planar_control_problem();

@@ -43,8 +43,11 @@ Diagnostics capabilities(const problem::ResolvedProblem &problem, const FamilyRe
         problem, family, family.representation);
     const bool exact_b04 = registry::detail::strategy_a_b04_c_exact_profile_valid(
         problem, family, family.representation);
-    if (!exact_ts01 && !exact_ts02 && !exact_ts03 && !exact_nominal && !exact_b04 &&
-        family.profile != "nominal_open_loop" && family.profile != lifted_nominal_profile)
+    const bool nominal_candidate = family.profile == "nominal_open_loop" ||
+                                   family.profile == projected_nominal_profile ||
+                                   family.profile == lifted_nominal_profile;
+    if (!nominal_candidate && !exact_ts01 && !exact_ts02 && !exact_ts03 && !exact_nominal &&
+        !exact_b04)
         return unsupported("strategy_a.profile",
                            "Select a nominal candidate profile or a reviewed exact profile.");
     if (!exact_ts01 && !exact_ts02 && !exact_ts03 && !exact_nominal && !exact_b04 &&
@@ -525,7 +528,11 @@ class StrategyAExecutionRunner final : public SynthesisWorkspace,
             }
             auto forward_timing = timing_scope(context, timing::forward);
             auto forwarded =
-                reachability::nominal_forward(problem, {"strategy-a/forward"}, forward_, context);
+                request.profile == projected_nominal_profile
+                    ? reachability::nominal_forward_projected(problem, {"strategy-a/forward"},
+                                                              forward_.projection, context)
+                    : reachability::nominal_forward(problem, {"strategy-a/forward"}, forward_,
+                                                    context);
             if (const auto *failure = std::get_if<reachability::ForwardFailure>(&forwarded)) {
                 close_timing(forward_timing, forward_termination(*failure));
                 lineage = forward_lineage(failure->prefix);
