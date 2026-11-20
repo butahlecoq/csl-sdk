@@ -40,11 +40,11 @@ double up(double x) {
 }
 
 std::optional<Interval> add(Interval a, Interval b) {
-  const double lo = a.lo + b.lo;
-  const double hi = a.hi + b.hi;
+  const double lo = down(a.lo + b.lo);
+  const double hi = up(a.hi + b.hi);
   if (!std::isfinite(lo) || !std::isfinite(hi))
     return {};
-  return Interval{down(lo), up(hi)};
+  return Interval{lo, hi};
 }
 
 std::optional<Interval> multiply(Interval a, Interval b) {
@@ -55,7 +55,11 @@ std::optional<Interval> multiply(Interval a, Interval b) {
     return {};
   const auto [minimum, maximum] =
       std::minmax_element(std::begin(products), std::end(products));
-  return Interval{down(*minimum), up(*maximum)};
+  const double lo = down(*minimum);
+  const double hi = up(*maximum);
+  if (!std::isfinite(lo) || !std::isfinite(hi))
+    return {};
+  return Interval{lo, hi};
 }
 
 // x = Qy, with unit superdiagonal entries within shear blocks.
@@ -240,8 +244,34 @@ coordinate_bounds(const sets::SetData &set, const ExecutionContext &context) {
   return result;
 }
 
+std::pair<double, double> pair_shear_activities(
+    const ParallelotopeStage &stage, std::span<const double> normal) {
+  constexpr double inf = std::numeric_limits<double>::infinity();
+  Interval total{0.0, 0.0};
+  for (std::size_t col = 0; col < normal.size(); ++col) {
+    const double current = normal[col];
+    const double previous = col % 2 == 0 ? 0.0 : normal[col - 1];
+    if (current == -previous)
+      continue;
+    const auto coefficient = add({current, current}, {previous, previous});
+    if (!coefficient)
+      return {-inf, inf};
+    const auto term =
+        multiply(*coefficient, {stage.lower[col], stage.upper[col]});
+    if (!term)
+      return {-inf, inf};
+    const auto updated = add(total, *term);
+    if (!updated)
+      return {-inf, inf};
+    total = *updated;
+  }
+  return {total.lo, total.hi};
+}
+
 auto parallelotope_support(const Matrix& frame, const ParallelotopeStage& stage) {
   return [&frame, &stage](std::span<const double> normal) {
+    if (frame.rows != 2 && frame.rows != 4)
+      return pair_shear_activities(stage, normal);
     long double lower = 0.0L, upper = 0.0L;
     for (std::size_t col = 0; col < frame.cols; ++col) {
       long double coefficient_value = 0.0L;

@@ -4,6 +4,7 @@
 #include <two_points_fixture.hpp>
 
 #include <cmath>
+#include <limits>
 #include <stop_token>
 
 using namespace csl;
@@ -117,6 +118,41 @@ TEST_CASE("pair shears enclose fixed-plan reachable points in three and 48 state
             }
         }
     }
+
+    const auto safe_with_limit = [n](double bound) {
+        Vector normal(n);
+        normal[0] = 1;
+        normal[1] = -1;
+        return take(sets::make_h(
+            {{"pair-shear-safe"}, n, {}},
+            {take(numeric::snapshot(Matrix{1, n, normal})),
+             take(numeric::snapshot_vector(Vector{bound})),
+             take(numeric::snapshot(Matrix{0, n, {}})),
+             take(numeric::snapshot_vector(Vector{}))}));
+    };
+    auto constrained = request;
+    constrained.admissible_states.back() = safe_with_limit(256);
+    CHECK(std::holds_alternative<FinitePlanParallelotopeTrace>(
+        finite_plan_parallelotope(constrained)));
+    constrained.admissible_states.back() = safe_with_limit(-256);
+    const auto rejected = finite_plan_parallelotope(constrained);
+    REQUIRE(std::holds_alternative<Unsupported>(rejected));
+    CHECK(std::get<Unsupported>(rejected).diagnostics.front().field ==
+          "finite_plan_parallelotope.safe_sets");
+
+    auto wrong_disturbance = request;
+    wrong_disturbance.disturbances.front() = domain;
+    CHECK(std::holds_alternative<Unsupported>(finite_plan_parallelotope(wrong_disturbance)));
+
+    auto overflowing = request;
+    Vector huge(n);
+    huge[0] = std::numeric_limits<double>::max();
+    overflowing.initial = take(sets::make_singleton(
+        {{"overflow-source"}, n, {}}, take(numeric::snapshot_vector(huge))));
+    const auto stopped = finite_plan_parallelotope(overflowing);
+    REQUIRE(std::holds_alternative<OperationStopped>(stopped));
+    CHECK(std::get<OperationStopped>(stopped).reason == StopReason::numerical_failure);
+
 }
 
 TEST_CASE(
