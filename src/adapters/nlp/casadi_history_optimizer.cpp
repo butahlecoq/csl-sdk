@@ -2,6 +2,7 @@
 #include <casadi/casadi.hpp>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -76,6 +77,29 @@ bool valid_scaling(const CasadiHistoryScaling &scaling, Dimensions dimensions) {
 Diagnostic invalid_scaling() {
     return {DiagnosticCode::invalid_input, "history.casadi_ipopt.scaling",
             "Provide one finite positive scale per physical state and control coordinate."};
+}
+
+std::string scale_vector_text(const Vector &values) {
+    std::string result = "[";
+    for (const auto value : values) {
+        if (result.size() > 1)
+            result += ',';
+        // The general format emits enough digits to recover the same double.
+        char buffer[64];
+        const auto converted = std::to_chars(buffer, buffer + sizeof(buffer), value);
+        if (converted.ec != std::errc{})
+            throw std::runtime_error("Physical scale does not fit its diagnostic representation.");
+        result.append(buffer, converted.ptr);
+    }
+    result += ']';
+    return result;
+}
+
+std::string scaling_evidence(const std::optional<CasadiHistoryScaling> &scaling) {
+    return scaling
+        ? "; state_scales=" + scale_vector_text(scaling->state) +
+              "; control_scales=" + scale_vector_text(scaling->control)
+        : "";
 }
 
 DM constraint_scaling(const numeric::MatrixView &matrix, const Vector &scales) {
@@ -317,7 +341,7 @@ public:
                 "; IPOPT; "+opti.stats().at("return_status").to_string()+
                 "; iterations="+std::to_string(static_cast<double>(opti.stats().at("iter_count")))+
                 "; all history coordinates free; local numerical" +
-                (scaling_ ? "; supplied physical coordinate scaling" : "");
+                scaling_evidence(scaling_);
             std::vector<optimization::HistoryMembershipWitness> membership_witnesses;
             for (std::size_t i = 0; i < membership_variables.size(); ++i) {
                 auto coefficients = membership_variables[i]
@@ -336,7 +360,8 @@ public:
             if(context.cancellation.stop_requested())return OperationStopped{StopReason::cancelled,"Native CasADi history optimization cancelled"};
             if(context.deadline&&std::chrono::steady_clock::now()>=*context.deadline)
                 return OperationStopped{StopReason::deadline_expired,"Native CasADi history optimization deadline expired"};
-            return Diagnostic{DiagnosticCode::unsupported,"history.casadi_ipopt",error.what()};
+            return Diagnostic{DiagnosticCode::unsupported, "history.casadi_ipopt",
+                              std::string(error.what()) + scaling_evidence(scaling_)};
         }
     }
 };

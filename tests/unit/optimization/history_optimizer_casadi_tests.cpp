@@ -139,6 +139,8 @@ TEST_CASE("CasADi/IPOPT solves full history with typed selected-state membership
         const auto &readback = std::get<VerifiedSuppliedStart>(result.initialization);
         CHECK(readback.membership_witness_readback == start.membership_witnesses);
         CHECK(readback.primal_readback == start.history);
+        const auto scale_evidence = result.diagnostics.find("state_scales=[100,0.01]; control_scales=[0.5]");
+        CHECK((scale_evidence != std::string::npos) == (&registration.get() == &scaled));
     }
 }
 
