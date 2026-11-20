@@ -192,3 +192,25 @@ TEST_CASE("Explicit MUMPS dependency detection retains the full original equalit
           std::string::npos);
     CHECK(std::get<VerifiedSuppliedStart>(solved.initialization).primal_readback == start.history);
 }
+
+TEST_CASE("CasADi returns a witness for a lifted H view of its original history") {
+    using namespace optimization;
+    auto request = integrator_request(2.0);
+    request.domain.state_frame = "x-y";
+    HistoryLiftedHMembership lifted{request.domain.original.relation.metadata()->id,
+                                    {{0, 2}}, {{0, 4}}};
+    request.domain.memberships = {{{1},
+        {{"prefix"}, {"prefix"}, HistorySetFamily::polytope, SetRelation::equivalent,
+         "x-y", {2, 3}, HistorySourceGeometry{{"prefix"}, HistorySetFamily::polytope, lifted}}, lifted}};
+    auto &start = std::get<SuppliedStart>(request.start);
+    start.membership_witnesses = {HistoryHWitness{}};
+    auto registration = adapters::nlp::make_casadi_history_optimizer_registration();
+    auto workspace = registration.factory(request);
+    auto outcome = registry::HistoryOptimizerPort::run(*workspace, request, ExecutionContext{});
+    const auto &solved = take<HistoryOptimizationResult>(std::move(outcome));
+    CHECK(solved.source_cost.total == doctest::Approx(std::sqrt(2.0)).epsilon(1e-6));
+    REQUIRE(solved.membership_witnesses.size() == 1);
+    CHECK(std::holds_alternative<HistoryHWitness>(solved.membership_witnesses.front()));
+    CHECK(std::get<VerifiedSuppliedStart>(solved.initialization).membership_witness_readback ==
+          start.membership_witnesses);
+}
