@@ -635,7 +635,7 @@ def analyze(build: Path, source: Corpus) -> dict[str, object]:
         "installed_standalone_headers": sorted(installed_standalone),
         "expected_failures": sorted(failures),
         "contexts": contexts,
-        "scope": "Retained include/src/tests/examples; broader source-owned queues remain unadopted",
+        "scope": "/".join(source.roots),
         "status": "passed",
     }
 
@@ -688,7 +688,7 @@ def coverage(receipts: list[dict[str, object]], source: Corpus) -> dict[str, obj
         require(not missing, f"Uncovered {label}: " + ", ".join(sorted(missing)))
     return {
         "status": "passed",
-        "scope": "include/src/tests/examples",
+        "scope": "/".join(source.roots),
         "retained_paths": len(source.hashes),
         "frozen_inputs": sorted(source.frozen),
         "profiles": sorted(profiles),
