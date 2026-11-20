@@ -632,7 +632,7 @@ def analyze(build: Path, source: Corpus) -> dict[str, object]:
         "installed_standalone_headers": sorted(installed_standalone),
         "expected_failures": sorted(failures),
         "contexts": contexts,
-        "scope": "Retained include/src/tests/examples; broader source-owned queues remain unadopted",
+        "scope": "/".join(source.roots),
         "status": "passed",
     }
 
