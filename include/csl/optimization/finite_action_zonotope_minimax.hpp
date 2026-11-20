@@ -19,6 +19,7 @@ struct FiniteActionZonotopeMinimaxLimits {
 struct ZonotopeCandidateScore {
     double terminal_factor_corner_maximum;
     std::size_t terminal_generators;
+    // One numerical evaluation when a certificate selects the corner.
     std::size_t factor_corners_evaluated;
     reachability::FinitePlanZonotopeTrace trace;
 };
@@ -84,11 +85,14 @@ struct FiniteActionZonotopeMinimaxResult {
 using FiniteActionZonotopeMinimaxOutcome =
     std::variant<FiniteActionZonotopeMinimaxResult, Unsupported, OperationStopped>;
 
-// Ranks fixed open-loop plans by numerical maxima over all terminal zonotope
-// factor corners, then exactly replays only the selected plan over the finite
-// catalogues. Candidate scores are not validated objective bounds or a claim
-// that the selector found a globally minimax plan. A deadline, cancellation or
-// candidate-attempt limit returns completed rows and a typed stopped row.
+// Ranks fixed open-loop plans by numerical maxima over terminal zonotope
+// factor corners, then replays the selected plan over the finite catalogues.
+// If enumeration exceeds a positive corner budget, convex diagonal quadratics
+// may use an exact sign certificate and one numerical corner evaluation.
+// Certification is limited to 64 states and 128 factors. When sign conditions
+// do not certify a corner, the existing corner-budget refusal is retained.
+// Scores have numerical assurance. A deadline, cancellation or candidate-attempt
+// limit returns completed rows and a typed stopped row.
 FiniteActionZonotopeMinimaxOutcome
 finite_action_zonotope_minimax(const FiniteActionMinimaxRequest &request,
                                FiniteActionZonotopeMinimaxLimits limits,
