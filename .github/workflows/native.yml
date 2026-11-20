@@ -92,12 +92,13 @@ jobs:
           python -m pip install cmake==3.31.6 casadi==3.8.0
           casadi_dir=$(python -c 'from pathlib import Path; import casadi; print(Path(casadi.__file__).resolve().parent / "cmake")')
           cmake -S . -B build/strategies -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
-            -DCSL_ENABLE_CASADI=ON -DCSL_ENABLE_HIGHS=ON -DCSL_ENABLE_QHULL=ON "-Dcasadi_DIR=$casadi_dir"
-      - name: Build both strategy suites and the native policy bridge
+            -DCSL_ENABLE_CASADI=ON -DCSL_ENABLE_HIGHS=ON -DCSL_ENABLE_QHULL=ON \
+            -DCSL_ENABLE_IPOPT=ON "-DIpopt_ROOT=$(dirname "$casadi_dir")" "-Dcasadi_DIR=$casadi_dir"
+      - name: Build the strategy suites, Ipopt client, and native policy bridge
         run: >-
           cmake --build build/strategies --parallel 4
-          --target strategy_a_tests direct_joint_strategy_tests csl_closed_loop_native_policy
-      - name: Run typed strategy suites and the five-family bridge regression
+          --target strategy_a_tests direct_joint_strategy_tests ipopt_convex_client csl_closed_loop_native_policy
+      - name: Run the strategy suites, Ipopt client, and five-family bridge regression
         run: |
-          ctest --test-dir build/strategies -R '^(strategy_a_tests|direct_joint_strategy_tests)$' --output-on-failure --no-tests=error
+          ctest --test-dir build/strategies -R '^(strategy_a_tests|direct_joint_strategy_tests|ipopt_convex_client)$' --output-on-failure --no-tests=error
           ctest --test-dir build/strategies -R '^native_history_feedback_bridge$' --output-on-failure --no-tests=error
