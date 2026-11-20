@@ -51,6 +51,22 @@ TEST_CASE("rational construction canonicalizes signs and powers of two") {
     CHECK(unreduced == one_third);
 }
 
+TEST_CASE("adding wide dyadics uses only the arithmetic operation budget") {
+    using exact_h::exact_detail::from_u64;
+    Rational large{from_u64(1), from_u64(1), 2048};
+    Rational one{from_u64(1), from_u64(1), 0};
+    Rational result;
+    Budget one_addition;
+    one_addition.max_operations = 1;
+    REQUIRE(add(large, one, result, one_addition));
+    CHECK(result.binary_exponent == 0);
+    CHECK(result.denominator == from_u64(1));
+    REQUIRE(result.numerator.words.size() == 65);
+    CHECK(result.numerator.words.front() == 1);
+    CHECK(result.numerator.words.back() == 1);
+    CHECK(one_addition.operations == 1);
+}
+
 TEST_CASE("rational arithmetic refuses bit and operation budget exhaustion") {
     Budget bit_budget{.max_integer_bits = 4, .max_operations = 16};
     Rational fifteen, sum;
