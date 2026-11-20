@@ -159,3 +159,36 @@ TEST_CASE("Scaled CasADi admits only positive finite scales for every physical c
     CHECK(std::holds_alternative<Diagnostics>(check(
         {100., std::numeric_limits<double>::infinity()}, {0.5})));
 }
+
+TEST_CASE("Explicit MUMPS dependency detection retains the full original equality history") {
+    using namespace optimization;
+    auto request = integrator_request(2.0);
+    const auto &old = request.domain.original.relation;
+    const auto rep = std::get<sets::HRepresentation>(old.representation());
+    Matrix eq{12, 8, {}};
+    Vector values;
+    for (unsigned copy = 0; copy < 2; ++copy) {
+        for (std::size_t row = 0; row < rep.equalities.rows(); ++row) {
+            for (std::size_t col = 0; col < rep.equalities.cols(); ++col)
+                eq.values.push_back(rep.equalities(row, col));
+            values.push_back(rep.equality_values[row]);
+        }
+    }
+    request.domain.original.relation = take(sets::make_h({old.metadata()->id, 8, {}},
+        {rep.inequalities, rep.upper_bounds, take(numeric::snapshot(eq)),
+         take(numeric::snapshot_vector(values))}));
+    const auto &start = std::get<SuppliedStart>(request.start);
+    auto registration = adapters::nlp::make_casadi_mumps_history_optimizer_registration();
+    CHECK(registration.identity.id.value == "csl.nlp.casadi-ipopt.mumps-history-cost");
+    REQUIRE(std::holds_alternative<registry::Offer>(registration.capabilities(request, {})));
+    auto worker = registration.factory(request);
+    const auto outcome = registry::HistoryOptimizerPort::run(*worker, request, ExecutionContext{});
+    if (const auto *error = std::get_if<Diagnostic>(&outcome))
+        INFO(error->explanation);
+    REQUIRE(std::holds_alternative<HistoryOptimizationResult>(outcome));
+    const auto &solved = std::get<HistoryOptimizationResult>(outcome);
+    CHECK(solved.source_cost.total == doctest::Approx(std::sqrt(2.0)).epsilon(1e-6));
+    CHECK(solved.diagnostics.find("dependency_detector=mumps; dependency_detection_with_rhs=yes") !=
+          std::string::npos);
+    CHECK(std::get<VerifiedSuppliedStart>(solved.initialization).primal_readback == start.history);
+}
