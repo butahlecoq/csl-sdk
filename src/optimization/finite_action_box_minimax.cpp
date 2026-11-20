@@ -16,19 +16,32 @@ Unsupported unsupported(std::string field, std::string message) {
     return {{{DiagnosticCode::unsupported, std::move(field), std::move(message)}}};
 }
 
-std::optional<QuadraticCoefficients> separable_quadratic(const Objective &objective) {
+using SeparableQuadratic = std::variant<std::monostate, QuadraticCoefficients, OperationStopped>;
+
+std::optional<OperationStopped> scoring_stop(const ExecutionContext &context) {
+    if (context.cancellation.stop_requested())
+        return OperationStopped{StopReason::cancelled, "Terminal box scoring cancelled."};
+    if (context.deadline && std::chrono::steady_clock::now() >= *context.deadline)
+        return OperationStopped{StopReason::deadline_expired,
+                                "Terminal box scoring deadline expired."};
+    return std::nullopt;
+}
+
+SeparableQuadratic separable_quadratic(const Objective &objective, const ExecutionContext &context) {
     if (objective.policy().assurance != Assurance::numerical)
-        return std::nullopt;
+        return {};
     const auto coefficients = objective.coefficients();
     const auto *quadratic = std::get_if<QuadraticCoefficients>(&coefficients);
     if (!quadratic)
-        return std::nullopt;
+        return {};
     for (std::size_t i = 0; i < objective.dimension(); ++i) {
+        if (const auto stop = scoring_stop(context))
+            return *stop;
         if (quadratic->Q(i, i) < 0)
-            return std::nullopt;
+            return {};
         for (std::size_t j = 0; j < objective.dimension(); ++j)
             if (i != j && quadratic->Q(i, j) != 0)
-                return std::nullopt;
+                return {};
     }
     return *quadratic;
 }
@@ -39,11 +52,8 @@ WorstCaseVertexOutcome score_separable_box(const reachability::BoxStage &box,
                                            const ExecutionContext &context) {
     auto corner = box.lower;
     for (std::size_t i = 0; i < corner.size(); ++i) {
-        if (context.cancellation.stop_requested())
-            return OperationStopped{StopReason::cancelled, "Terminal box scoring cancelled."};
-        if (context.deadline && std::chrono::steady_clock::now() >= *context.deadline)
-            return OperationStopped{StopReason::deadline_expired,
-                                    "Terminal box scoring deadline expired."};
+        if (const auto stop = scoring_stop(context))
+            return *stop;
         const auto lo = box.lower[i], hi = box.upper[i];
         if (!std::isfinite(lo) || !std::isfinite(hi))
             return OperationStopped{StopReason::numerical_failure,
@@ -102,10 +112,12 @@ std::variant<sets::SetData, Unsupported> terminal_box(const reachability::BoxSta
 
 WorstCaseVertexOutcome score_terminal_box(const reachability::BoxStage &box,
                                           const Objective &objective, std::size_t corner_limit,
-                                          const std::optional<QuadraticCoefficients> &separable,
+                                          const SeparableQuadratic &separable,
                                           const ExecutionContext &context) {
-    if (separable && corner_limit > 0)
-        return score_separable_box(box, objective, *separable, context);
+    if (const auto *stopped = std::get_if<OperationStopped>(&separable))
+        return *stopped;
+    if (const auto *quadratic = std::get_if<QuadraticCoefficients>(&separable))
+        return score_separable_box(box, objective, *quadratic, context);
     auto corners = terminal_box(box, corner_limit);
     if (const auto *error = std::get_if<Unsupported>(&corners))
         return *error;
@@ -134,7 +146,7 @@ FiniteActionBoxMinimaxOutcome finite_action_box_minimax(
 
     std::vector<FiniteActionBoxPlanAttempt> attempts;
     attempts.reserve(plan_count);
-    const auto separable = separable_quadratic(request.objective);
+    std::optional<SeparableQuadratic> separable;
     std::optional<std::size_t> selected_index;
     double minimum = std::numeric_limits<double>::infinity();
     bool search_stopped = false;
@@ -163,8 +175,11 @@ FiniteActionBoxMinimaxOutcome finite_action_box_minimax(
             break;
         }
         auto trace = std::get<reachability::FinitePlanBoxTrace>(std::move(propagated));
+        if (!separable)
+            separable.emplace(limits.max_box_corners == 0
+                ? SeparableQuadratic{} : separable_quadratic(request.objective, context));
         const auto score = score_terminal_box(trace.stages.back(), request.objective,
-            limits.max_box_corners, separable, context);
+            limits.max_box_corners, *separable, context);
         if(const auto* error = std::get_if<Unsupported>(&score)) {
             attempts.emplace_back(BoxPlanUnscored{choices, *error});
             continue;
