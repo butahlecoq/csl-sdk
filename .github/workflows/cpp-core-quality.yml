@@ -8,6 +8,7 @@ on:
       - 'tests/**'
       - 'examples/**'
       - 'tools/**'
+      - 'probes/**'
       - 'cmake/**'
       - 'CMakeLists.txt'
       - 'CMakePresets.json'
@@ -25,6 +26,7 @@ on:
       - 'tests/**'
       - 'examples/**'
       - 'tools/**'
+      - 'probes/**'
       - 'cmake/**'
       - 'CMakeLists.txt'
       - 'CMakePresets.json'
@@ -104,6 +106,14 @@ jobs:
         run: >-
           ctest --test-dir "$BUILD_ROOT" --output-on-failure --no-tests=error
           -LE reporting ${{ matrix.profile == 'casadi' && '-E ^installed_public_client$' || '' }}
+      - name: Build and run the isolated native probes
+        if: matrix.profile == 'highs'
+        run: |
+          cmake -S probes/core-01 -B "$BUILD_ROOT/native-probes" -G Ninja \
+            -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCSL_DEPENDENCY_PROBES=ON
+          cmake --build "$BUILD_ROOT/native-probes" --parallel 1
+          ctest --test-dir "$BUILD_ROOT/native-probes" --output-on-failure --no-tests=error
       - name: Qualify the actual CasADi installed consumers
         if: matrix.profile == 'casadi'
         run: |

@@ -397,7 +397,9 @@ def copied_origin(path: Path, source: Corpus) -> str | None:
 def origin(
     path: Path, source: Corpus, build: Path, copies: list[Path], prefixes: list[Path]
 ) -> str | None:
-    if path.is_relative_to(build / "_deps"):
+    if path.is_relative_to(build / "_deps") or path.is_relative_to(
+        build / "native-probes/_deps"
+    ):
         return None
     if path.is_relative_to(source.root):
         relative = path.relative_to(source.root).as_posix()
@@ -478,6 +480,15 @@ def analyze(build: Path, source: Corpus) -> dict[str, object]:
         bool(installed_headers) and installed_headers <= source.public_headers,
         "Installed public-header receipt differs from the current source scope",
     )
+    if name == "highs":
+        probes = build / "native-probes"
+        probe_cache = cache_values(probes)
+        require(
+            Path(probe_cache.get("CMAKE_HOME_DIRECTORY", "")).resolve()
+            == source.root / "probes/core-01",
+            "The HiGHS quality profile needs the actual isolated SDK probe build",
+        )
+        builds.append(probes)
     checked_sources: set[str] = set()
     checked_headers: set[str] = set()
     standalone: set[str] = set()
@@ -529,7 +540,7 @@ def analyze(build: Path, source: Corpus) -> dict[str, object]:
             observed: set[str] = set()
             for dependency in dependencies[output]:
                 require(
-                    current == build or not dependency.is_relative_to(source.root),
+                    current not in children or not dependency.is_relative_to(source.root),
                     f"Installed consumer leaked a repository dependency: {dependency}",
                 )
                 owned = origin(dependency, source, build, copies, prefixes)
