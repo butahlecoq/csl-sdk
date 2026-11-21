@@ -6,16 +6,16 @@
 namespace csl::reachability {
 
 struct ParallelotopeStage {
-  Vector lower;
-  Vector upper;
+    Vector lower;
+    Vector upper;
 };
 
 struct FinitePlanParallelotopeTrace {
-  static constexpr SetRelation relation = SetRelation::outer;
-  // x = frame * y; each coordinate box in y is one physical parallelotope.
-  Matrix frame;
-  std::vector<ParallelotopeStage> stages;
-  Assurance assurance{Assurance::numerical};
+    static constexpr SetRelation relation = SetRelation::outer;
+    // x = frame * y; each coordinate box in y is one physical parallelotope.
+    Matrix frame;
+    std::vector<ParallelotopeStage> stages;
+    Assurance assurance{Assurance::numerical};
 };
 
 using FinitePlanParallelotopeOutcome =
@@ -27,8 +27,7 @@ using FinitePlanParallelotopeOutcome =
 // Universal, singleton and H state constraints are supported when every full
 // outer parallelotope is contained; failed containment is inconclusive.
 // Singular dynamics are supported because the frame is independent of A.
-FinitePlanParallelotopeOutcome
-finite_plan_parallelotope(const FixedPlanRequest &request,
-                          const ExecutionContext &context = {});
+FinitePlanParallelotopeOutcome finite_plan_parallelotope(const FixedPlanRequest &request,
+                                                         const ExecutionContext &context = {});
 
 } // namespace csl::reachability

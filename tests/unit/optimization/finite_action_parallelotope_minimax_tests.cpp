@@ -1,4 +1,3 @@
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <csl/optimization/finite_action_parallelotope_minimax.hpp>
 #include <doctest/doctest.h>
 #include <two_points_fixture.hpp>
@@ -42,10 +41,11 @@ TEST_CASE("large diagonal parallelotope scores agree with a physical corner orac
     REQUIRE(std::holds_alternative<numeric::MatrixView>(vertices));
     REQUIRE(std::holds_alternative<numeric::MatrixView>(no_rays));
     REQUIRE(std::holds_alternative<numeric::VectorView>(no_external));
-    const auto initial = sets::make_v({{"diagonal-initial"}, n, {}},
-        {std::get<numeric::MatrixView>(vertices), std::get<numeric::MatrixView>(no_rays)});
+    const auto initial =
+        sets::make_v({{"diagonal-initial"}, n, {}}, {std::get<numeric::MatrixView>(vertices),
+                                                     std::get<numeric::MatrixView>(no_rays)});
     const auto disturbance = sets::make_singleton({{"zero-external"}, 0, {}},
-        std::get<numeric::VectorView>(no_external));
+                                                  std::get<numeric::VectorView>(no_external));
     const auto domain = sets::make_universal({{"diagonal-domain"}, n, {}});
     const auto objective = snapshot(QuadraticTerminal{q, linear, 1.25});
     REQUIRE(std::holds_alternative<sets::SetData>(initial));
@@ -53,10 +53,14 @@ TEST_CASE("large diagonal parallelotope scores agree with a physical corner orac
     REQUIRE(std::holds_alternative<sets::SetData>(domain));
     REQUIRE(std::holds_alternative<Objective>(objective));
     const auto safe = std::get<sets::SetData>(domain);
-    const FiniteActionMinimaxRequest request{
-        {"diagonal-frame"}, {"diagonal-frame/1"}, std::get<model::LinearSystem>(system),
-        std::get<sets::SetData>(initial), {1, {{1}, {0}, {0}}},
-        {std::get<sets::SetData>(disturbance)}, {safe, safe}, std::get<Objective>(objective)};
+    const FiniteActionMinimaxRequest request{{"diagonal-frame"},
+                                             {"diagonal-frame/1"},
+                                             std::get<model::LinearSystem>(system),
+                                             std::get<sets::SetData>(initial),
+                                             {1, {{1}, {0}, {0}}},
+                                             {std::get<sets::SetData>(disturbance)},
+                                             {safe, safe},
+                                             std::get<Objective>(objective)};
     const auto answer = finite_action_parallelotope_minimax(request, {3, 2, 2});
     REQUIRE(std::holds_alternative<FiniteActionParallelotopeMinimaxResult>(answer));
     const auto &result = std::get<FiniteActionParallelotopeMinimaxResult>(answer);
@@ -71,9 +75,9 @@ TEST_CASE("large diagonal parallelotope scores agree with a physical corner orac
         // propagation. A regular pair's maximum is 4 at (2,1).
         // The action +1 shifts the physical pair, giving max 12 at (3,2).
         // The decreasing first pair contributes 0 or -14 at its lower corner.
-        const double analytic = 1.25 + static_cast<double>(n / 2 - 1) * (shifted ? 12 : 4) +
-                                (shifted ? -14 : 0) +
-                                (n % 2 != 0 ? (shifted ? 6 : 2) : 0);
+        const auto regular_pairs = n / 2 - 1;
+        const double analytic = 1.25 + static_cast<double>(regular_pairs) * (shifted ? 12 : 4) +
+                                (shifted ? -14 : 0) + (n % 2 != 0 ? (shifted ? 6 : 2) : 0);
         CHECK(attempt.score.terminal_frame_box_corner_maximum ==
               doctest::Approx(analytic).epsilon(1e-12));
         if (n == 9) {
@@ -97,7 +101,6 @@ TEST_CASE("large diagonal parallelotope scores agree with a physical corner orac
     REQUIRE(std::holds_alternative<ParallelotopePlanSelected>(result.selection));
     CHECK(std::get<ParallelotopePlanSelected>(result.selection).candidate_attempt_index == 1);
 }
-
 
 TEST_CASE("parallelotope selector bounds the exhaustive fallback for large frames") {
     constexpr std::size_t n = 48;
@@ -151,67 +154,58 @@ TEST_CASE("parallelotope selector bounds the exhaustive fallback for large frame
 
 TEST_CASE("TwoPoints parallelotope selector scores each plan and independently "
           "replays the selected plan") {
-  const auto request =
-      csl::issue824::fixture::two_points_request("parallelotope-minimax-test");
-  const auto answer =
-      finite_action_parallelotope_minimax(request, {27, 27, 27});
-  REQUIRE(
-      std::holds_alternative<FiniteActionParallelotopeMinimaxResult>(answer));
-  const auto &result = std::get<FiniteActionParallelotopeMinimaxResult>(answer);
-  REQUIRE(result.candidate_search == CandidateSearchCoverage::complete);
-  REQUIRE(result.plan_attempts.size() == 27);
-  std::size_t scored = 0;
-  for (const auto &attempt : result.plan_attempts) {
-    REQUIRE(std::holds_alternative<ParallelotopePlanScored>(attempt));
-    const auto &score = std::get<ParallelotopePlanScored>(attempt).score;
-    CHECK(std::isfinite(score.terminal_frame_box_corner_maximum));
-    CHECK(score.corners_evaluated == 16);
-    CHECK(score.trace.stages.size() == request.system.horizon() + 1);
-    ++scored;
-  }
-  CHECK(scored == 27);
-  REQUIRE(std::holds_alternative<ParallelotopePlanSelected>(result.selection));
-  const auto &selected = std::get<ParallelotopePlanSelected>(result.selection);
-  CHECK(selected.candidate_attempt_index < result.plan_attempts.size());
-  CHECK(selected.replay.path.size() == request.system.horizon() + 1);
-  CHECK(std::isfinite(selected.replay.worst_value));
+    const auto request = csl::issue824::fixture::two_points_request("parallelotope-minimax-test");
+    const auto answer = finite_action_parallelotope_minimax(request, {27, 27, 27});
+    REQUIRE(std::holds_alternative<FiniteActionParallelotopeMinimaxResult>(answer));
+    const auto &result = std::get<FiniteActionParallelotopeMinimaxResult>(answer);
+    REQUIRE(result.candidate_search == CandidateSearchCoverage::complete);
+    REQUIRE(result.plan_attempts.size() == 27);
+    std::size_t scored = 0;
+    for (const auto &attempt : result.plan_attempts) {
+        REQUIRE(std::holds_alternative<ParallelotopePlanScored>(attempt));
+        const auto &score = std::get<ParallelotopePlanScored>(attempt).score;
+        CHECK(std::isfinite(score.terminal_frame_box_corner_maximum));
+        CHECK(score.corners_evaluated == 16);
+        CHECK(score.trace.stages.size() == request.system.horizon() + 1);
+        ++scored;
+    }
+    CHECK(scored == 27);
+    REQUIRE(std::holds_alternative<ParallelotopePlanSelected>(result.selection));
+    const auto &selected = std::get<ParallelotopePlanSelected>(result.selection);
+    CHECK(selected.candidate_attempt_index < result.plan_attempts.size());
+    CHECK(selected.replay.path.size() == request.system.horizon() + 1);
+    CHECK(std::isfinite(selected.replay.worst_value));
 }
 
 TEST_CASE("parallelotope selector preserves a stopped candidate and incomplete "
           "coverage") {
-  const auto request =
-      csl::issue824::fixture::two_points_request("parallelotope-stopped-test");
-  std::stop_source cancellation;
-  cancellation.request_stop();
-  ExecutionContext context;
-  context.cancellation = cancellation.get_token();
-  const auto answer =
-      finite_action_parallelotope_minimax(request, {27, 27, 27}, context);
-  REQUIRE(
-      std::holds_alternative<FiniteActionParallelotopeMinimaxResult>(answer));
-  const auto &result = std::get<FiniteActionParallelotopeMinimaxResult>(answer);
-  CHECK(result.candidate_search == CandidateSearchCoverage::incomplete);
-  REQUIRE(result.plan_attempts.size() == 1);
-  REQUIRE(std::holds_alternative<ParallelotopePlanStopped>(
-      result.plan_attempts.front()));
-  CHECK(std::get<ParallelotopePlanStopped>(result.plan_attempts.front())
-            .outcome.reason == StopReason::cancelled);
+    const auto request = csl::issue824::fixture::two_points_request("parallelotope-stopped-test");
+    std::stop_source cancellation;
+    cancellation.request_stop();
+    ExecutionContext context;
+    context.cancellation = cancellation.get_token();
+    const auto answer = finite_action_parallelotope_minimax(request, {27, 27, 27}, context);
+    REQUIRE(std::holds_alternative<FiniteActionParallelotopeMinimaxResult>(answer));
+    const auto &result = std::get<FiniteActionParallelotopeMinimaxResult>(answer);
+    CHECK(result.candidate_search == CandidateSearchCoverage::incomplete);
+    REQUIRE(result.plan_attempts.size() == 1);
+    REQUIRE(std::holds_alternative<ParallelotopePlanStopped>(result.plan_attempts.front()));
+    CHECK(std::get<ParallelotopePlanStopped>(result.plan_attempts.front()).outcome.reason ==
+          StopReason::cancelled);
 }
 
 TEST_CASE("parallelotope selector refuses candidate propagation over the point "
           "budget") {
-  const auto request = csl::issue824::fixture::two_points_request(
-      "parallelotope-point-limit-test");
-  const auto answer = finite_action_parallelotope_minimax(request, {27, 1, 27});
-  REQUIRE(
-      std::holds_alternative<FiniteActionParallelotopeMinimaxResult>(answer));
-  const auto &result = std::get<FiniteActionParallelotopeMinimaxResult>(answer);
-  CHECK(result.candidate_search == CandidateSearchCoverage::incomplete);
-  REQUIRE(result.plan_attempts.size() == 27);
-  for (const auto &attempt : result.plan_attempts) {
-    REQUIRE(std::holds_alternative<ParallelotopePlanUnscored>(attempt));
-    CHECK(std::get<ParallelotopePlanUnscored>(attempt)
-              .outcome.diagnostics.front()
-              .field == "finite_parallelotope_minimax.points.limit");
-  }
+    const auto request =
+        csl::issue824::fixture::two_points_request("parallelotope-point-limit-test");
+    const auto answer = finite_action_parallelotope_minimax(request, {27, 1, 27});
+    REQUIRE(std::holds_alternative<FiniteActionParallelotopeMinimaxResult>(answer));
+    const auto &result = std::get<FiniteActionParallelotopeMinimaxResult>(answer);
+    CHECK(result.candidate_search == CandidateSearchCoverage::incomplete);
+    REQUIRE(result.plan_attempts.size() == 27);
+    for (const auto &attempt : result.plan_attempts) {
+        REQUIRE(std::holds_alternative<ParallelotopePlanUnscored>(attempt));
+        CHECK(std::get<ParallelotopePlanUnscored>(attempt).outcome.diagnostics.front().field ==
+              "finite_parallelotope_minimax.points.limit");
+    }
 }

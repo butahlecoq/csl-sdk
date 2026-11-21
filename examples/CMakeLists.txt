@@ -85,6 +85,9 @@ if(DEFINED EXAMPLE_EXE)
 endif()
 
 project(CSLExamples LANGUAGES CXX)
+if(CMAKE_EXPORT_COMPILE_COMMANDS)
+  cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2 CACHE 2 CMAKEFILES 1 TOOLCHAINS 1)
+endif()
 find_package(CSL 0.1 CONFIG REQUIRED)
 enable_testing()
 
@@ -105,6 +108,10 @@ function(csl_example example)
     target_compile_options(${example} PRIVATE -Wall -Wextra -Wpedantic -Werror)
   endif()
 endfunction()
+
+add_executable(kpabep_near_collinear geometry/kpabep_near_collinear.cpp)
+target_link_libraries(kpabep_near_collinear PRIVATE CSL::legacy_btulshor)
+set_target_properties(kpabep_near_collinear PROPERTIES CXX_EXTENSIONS OFF)
 
 csl_example(registered_lp CSL::highs_lp)
 csl_example(registered_convex CSL::highs_convex)
@@ -210,6 +217,8 @@ function(example_check name executable argument status output)
   set_tests_properties(${name} PROPERTIES TIMEOUT 30)
 endfunction()
 
+example_check(kpabep_collinear_smoke kpabep_near_collinear "" 0
+  "ordinary_triangle returned_original_ids=")
 example_check(lp_triangle registered_lp "" 0 "x=0 y=1 original_cost=5")
 example_check(native_slide50_authored_box native_slide50_reachability "" 0
   "Slide50 authored box: both horizon variants and all full-state corner checks passed")

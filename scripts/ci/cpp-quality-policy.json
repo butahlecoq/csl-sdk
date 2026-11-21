@@ -1,0 +1,21 @@
+{
+  "schema": "csl.cpp-quality-policy/1",
+  "roots": [
+    "include",
+    "src",
+    "tests",
+    "examples"
+  ],
+  "frozen": [],
+  "expected_compile_failures": [
+    "tests/installed/ts01_issuer_forge_client.cpp",
+    "tests/installed/ts01_callback_forge_client.cpp",
+    "tests/installed/ts01_relation_factory_forge_client.cpp",
+    "tests/installed/farkas_factory_forge_client.cpp"
+  ],
+  "deferred_owners": [
+    "tools",
+    "probes"
+  ],
+  "scope_note": "The gate covers installed headers, native implementation, tests and shipped examples. The standalone tool and dependency-probe sources are tracked separately."
+}

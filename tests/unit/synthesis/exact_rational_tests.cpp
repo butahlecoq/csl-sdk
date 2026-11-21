@@ -1,4 +1,3 @@
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <cmath>
 #include <limits>
@@ -8,7 +7,7 @@
 using namespace csl::synthesis::detail::exact_rational;
 
 namespace {
-bool same(const Rational& lhs, const Rational& rhs, Budget& budget) {
+bool same(const Rational &lhs, const Rational &rhs, Budget &budget) {
     bool result{};
     return equal(lhs, rhs, result, budget) && result;
 }
@@ -89,7 +88,8 @@ TEST_CASE("rational conversion rejects nonfinite binary64 inputs") {
 TEST_CASE("rational parser handles large exact witnesses and rejects malformed input") {
     Budget budget;
     Rational parsed, expected;
-    REQUIRE(parse("-22372732538527557968995655584885504649887873368947295001505132908576311772305610948689388831835602767915142538822180404220637/65742268634831342597332464158599530180018681724968804273528997972883832204336594969293002728400911316448736602407117160185856",
+    REQUIRE(parse(
+        "-22372732538527557968995655584885504649887873368947295001505132908576311772305610948689388831835602767915142538822180404220637/65742268634831342597332464158599530180018681724968804273528997972883832204336594969293002728400911316448736602407117160185856",
         parsed, budget));
     CHECK(parsed.numerator.negative);
     CHECK_FALSE(parse("1//2", expected, budget));
@@ -174,16 +174,17 @@ TEST_CASE("exact projection can substitute a signed equality before generating i
     REQUIRE(exact_h::append_inequality(positive, 0, false, limits.max_integer_bits, expected));
     REQUIRE(exact_h::append_inequality(negative, 2, true, limits.max_integer_bits, expected));
 
-    const auto result = exact_h::feasible(bounds, 2, limits, std::stop_token{}, 1,
-                                          &projected, equalities);
+    const auto result =
+        exact_h::feasible(bounds, 2, limits, std::stop_token{}, 1, &projected, equalities);
     REQUIRE(result.state == FeasibilityState::feasible);
     CHECK(result.generated_rows == 0);
     CHECK(exact_h::included_in(projected, expected, 1).state == InclusionState::included);
     CHECK(exact_h::included_in(expected, projected, 1).state == InclusionState::included);
 
     limits.max_operations = 1;
-    CHECK(exact_h::feasible(bounds, 2, limits, std::stop_token{}, 1,
-                            &projected, equalities).state == FeasibilityState::unsupported);
+    CHECK(
+        exact_h::feasible(bounds, 2, limits, std::stop_token{}, 1, &projected, equalities).state ==
+        FeasibilityState::unsupported);
     CHECK(projected.empty());
 }
 
@@ -194,14 +195,14 @@ TEST_CASE("contradictory eliminated equalities are infeasible") {
     REQUIRE(exact_h::make_row(coefficients, 2, false, 8192, equalities[1]));
 
     using exact_h::FeasibilityState;
-    CHECK(exact_h::feasible({}, 2, {}, std::stop_token{}, 1,
-                            &projected, equalities).state == FeasibilityState::infeasible);
+    CHECK(exact_h::feasible({}, 2, {}, std::stop_token{}, 1, &projected, equalities).state ==
+          FeasibilityState::infeasible);
     CHECK(projected.empty());
 
     std::stop_source source;
     source.request_stop();
-    CHECK(exact_h::feasible({}, 2, {}, source.get_token(), 1,
-                            &projected, equalities).state == FeasibilityState::cancelled);
+    CHECK(exact_h::feasible({}, 2, {}, source.get_token(), 1, &projected, equalities).state ==
+          FeasibilityState::cancelled);
 }
 
 TEST_CASE("rounded H rows cover the exact boundary despite losing normal bits") {
@@ -212,7 +213,7 @@ TEST_CASE("rounded H rows cover the exact boundary despite losing normal bits") 
     REQUIRE(make_integer(0, zero, budget));
     const Interval box[] = {{minus_one, zero}};
     const exact_h::Row row{{exact_h::exact_detail::from_u64((std::uint64_t{1} << 54) + 1)},
-                            exact_h::exact_detail::from_u64((std::uint64_t{1} << 54) + 1, true)};
+                           exact_h::exact_detail::from_u64((std::uint64_t{1} << 54) + 1, true)};
     const auto rounded = enclose_upper_row(row, box, budget);
     REQUIRE(rounded);
     CHECK(rounded->coefficients == std::vector<double>{0.5});

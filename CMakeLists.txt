@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.31)
 project(CSL VERSION 0.1.1 LANGUAGES C CXX)
+option(CSL_CPP_QUALITY "Create real first-party native quality contexts" OFF)
+set(CSL_CPP_QUALITY_PROFILE "" CACHE STRING "Native quality profile: core, highs, casadi")
+if(CSL_CPP_QUALITY)
+  set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Export actual quality commands" FORCE)
+endif()
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(GNUInstallDirs)
@@ -177,4 +182,8 @@ if(BUILD_TESTING)
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/tooling/test_native_history_feedback.py
               $<TARGET_FILE:csl_closed_loop_native_policy>)
   endif()
+endif()
+
+if(CSL_CPP_QUALITY)
+  include(cmake/CppQuality.cmake)
 endif()

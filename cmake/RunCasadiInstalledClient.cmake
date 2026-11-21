@@ -6,27 +6,40 @@ foreach(required CSL_SOURCE_DIR CSL_INSTALL_PREFIX CSL_WORK_DIR CSL_CASADI_DIR)
 endforeach()
 file(MAKE_DIRECTORY "${CSL_WORK_DIR}/source" "${CSL_WORK_DIR}/empty-path" "${CSL_WORK_DIR}/tmp")
 file(COPY
+  "${CSL_SOURCE_DIR}/tests/installed/HeaderContexts.cmake"
   "${CSL_SOURCE_DIR}/tests/installed/fixed_tail_policy_client.cpp"
+  "${CSL_SOURCE_DIR}/tests/installed/casadi_history_optimizer_client.cpp"
+  "${CSL_SOURCE_DIR}/tests/installed/casadi_superscs_history_optimizer_client.cpp"
   "${CSL_SOURCE_DIR}/tests/unit/reachability/fixed_tail_validation_tests.cpp"
   "${CSL_SOURCE_DIR}/tests/unit/reachability/inner_template_tests.cpp"
   DESTINATION "${CSL_WORK_DIR}/source")
 file(WRITE "${CSL_WORK_DIR}/source/CMakeLists.txt" [=[
 cmake_minimum_required(VERSION 3.31)
 project(CasadiInstalledConsumers LANGUAGES CXX)
+if(CMAKE_EXPORT_COMPILE_COMMANDS)
+  cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2 CACHE 2 CMAKEFILES 1 TOOLCHAINS 1)
+endif()
 find_package(CSL CONFIG REQUIRED)
+if(CMAKE_EXPORT_COMPILE_COMMANDS)
+  include("${CMAKE_CURRENT_LIST_DIR}/HeaderContexts.cmake")
+endif()
 add_executable(policy fixed_tail_policy_client.cpp)
 target_link_libraries(policy PRIVATE CSL::casadi_fixed_tail)
 add_executable(boundaries fixed_tail_validation_tests.cpp)
 target_link_libraries(boundaries PRIVATE CSL::fixed_tail_policy)
 add_executable(templates inner_template_tests.cpp)
 target_link_libraries(templates PRIVATE CSL::inner_template)
+add_executable(history_optimizer casadi_history_optimizer_client.cpp)
+target_link_libraries(history_optimizer PRIVATE CSL::casadi_history_optimizer)
+add_executable(superscs_history_optimizer casadi_superscs_history_optimizer_client.cpp)
+target_link_libraries(superscs_history_optimizer PRIVATE CSL::casadi_superscs_history_optimizer)
 ]=])
 execute_process(COMMAND "${CMAKE_COMMAND}" -S "${CSL_WORK_DIR}/source" -B "${CSL_WORK_DIR}/build" -G Ninja
-  -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=${CSL_INSTALL_PREFIX}" "-Dcasadi_DIR=${CSL_CASADI_DIR}"
+  -DCMAKE_BUILD_TYPE=Release "-DCMAKE_EXPORT_COMPILE_COMMANDS=${CSL_EXPORT_COMPILE_COMMANDS}" "-DCMAKE_SUPPRESS_REGENERATION=${CSL_EXPORT_COMPILE_COMMANDS}" "-DCMAKE_PREFIX_PATH=${CSL_INSTALL_PREFIX}" "-Dcasadi_DIR=${CSL_CASADI_DIR}"
   COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${CMAKE_COMMAND}" --build "${CSL_WORK_DIR}/build" --parallel 1
   COMMAND_ERROR_IS_FATAL ANY)
-foreach(client policy boundaries templates)
+foreach(client policy boundaries templates history_optimizer superscs_history_optimizer)
   execute_process(COMMAND /usr/bin/env -i "PATH=${CSL_WORK_DIR}/empty-path" "TMPDIR=${CSL_WORK_DIR}/tmp"
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 "${CSL_WORK_DIR}/build/${client}"
     COMMAND_ERROR_IS_FATAL ANY)
