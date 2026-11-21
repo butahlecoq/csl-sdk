@@ -5,6 +5,8 @@ The first example uses a two-state plant to show when the next observation chang
 
 Use this repository for the C++ library, its CMake package and runnable examples. Download versioned source from [SDK releases](https://github.com/butahlecoq/csl-sdk/releases). The research project hosts the [illustrated learning book](https://butahlecoq.github.io/controlled-systems-lab/learn/), [numerical reports](https://butahlecoq.github.io/controlled-systems-lab/archive.html) and [historical releases](https://github.com/butahlecoq/controlled-systems-lab/releases/tag/v0.1.0).
 
+The [core numerical value contracts](docs/architecture/decisions/0001-core-value-contracts.md) define matrix layout, interval endpoints, and scaled residuals.
+
 ## Quick start
 
 Build an observed-state controller, run it beside an open-loop plan, and inspect the first step at which their controls differ. You need Git, CMake/CTest 3.31 or newer and a C++20 compiler. On Windows, use a Visual Studio developer shell with CMake installed. The first configure downloads the pinned HiGHS and Qhull dependencies. CI exercises this default profile on Ubuntu.

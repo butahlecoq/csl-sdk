@@ -32,4 +32,4 @@ Diagnostics check_model_shape(const Dynamics &dynamics, std::size_t horizon) {
     }
     return result;
 }
-} // namespace csl
+}
