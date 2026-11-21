@@ -72,6 +72,8 @@ TEST_CASE("all literal layouts retain values through copy and move assignment") 
         auto vector_copy = vector;
         auto matrix_move = std::move(matrix);
         auto vector_move = std::move(vector);
+        // Rvalue construction copies both retaining views.
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         CHECK(accepted(multiply(matrix, vector)) == Vector{68, 161});
         CHECK(accepted(multiply(matrix_move, vector_move)) == Vector{68, 161});
         auto assigned_matrix = accepted(snapshot(Matrix{1, 1, {-99}}));
@@ -81,6 +83,8 @@ TEST_CASE("all literal layouts retain values through copy and move assignment") 
         CHECK(accepted(multiply(assigned_matrix, assigned_vector)) == Vector{68, 161});
         assigned_matrix = std::move(matrix_copy);
         assigned_vector = std::move(vector_copy);
+        // Rvalue assignment copies both retaining views.
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         CHECK(accepted(multiply(matrix_copy, vector_copy)) == Vector{68, 161});
         matrix = accepted(snapshot(Matrix{1, 1, {3}}));
         vector = accepted(snapshot_vector(Vector{-2}));
@@ -135,6 +139,8 @@ TEST_CASE("CSR retained borrows preserve empty rows and explicit zero after move
     auto source =
         accepted(snapshot(SparseMatrix{4, 4, {0, 2, 2, 3, 5}, {0, 3, 1, 0, 2}, {0, -2, 3, -1, 4}}));
     const auto moved = std::move(source);
+    // The rvalue construction retains the original CSR view.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     const auto descriptor = std::get<CsrInput>(source.descriptor());
     const auto vector = accepted(snapshot_vector(Vector{2, -3, 5, -7}));
     CHECK(accepted(multiply(source, vector)) == Vector{14, 0, -9, 18});
@@ -165,9 +171,13 @@ TEST_CASE("gated joined workers retain dense and CSR views after source owners d
         auto sparse = accepted(snapshot(csr));
         auto vector = accepted(snapshot_vector(input));
         for (int index = 0; index < 4; ++index) {
+            // Construction from sparse as an rvalue copies its retaining view.
+            // NOLINTNEXTLINE(bugprone-use-after-move)
             auto matrix = index % 2 == 0 ? dense : std::move(sparse);
             workers.push_back(std::async(
                 std::launch::async,
+                // Each rvalue capture copies the shared vector view.
+                // NOLINTNEXTLINE(bugprone-use-after-move)
                 [matrix = std::move(matrix), vector = std::move(vector), release = gate.future()] {
                     release.wait();
                     const auto descriptor = matrix.descriptor();

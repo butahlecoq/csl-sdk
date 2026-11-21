@@ -388,6 +388,8 @@ TEST_CASE(
           "csl.problem.v1.sha256:2320a9f596bfa8f5bdd8aa6d272ca96fe5ff229411b65e1ab3e6f469a27f815e");
     auto copy = p;
     auto rvalue = std::move(copy);
+    // ResolvedProblem construction from an rvalue copies the retaining handle.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     CHECK(copy.identity() == p.identity());
     CHECK(rvalue.identity() == p.identity());
     const auto description = [] { return published(scalar()).description(); }();
@@ -523,6 +525,8 @@ TEST_CASE("content roots match literals and distinguish bytes from display paths
     CHECK(std::get<Diagnostic>(bad).field == "problem.content.digest");
     CHECK(accepted(snapshot_content(unhex("31"), content.digest())).digest() == content.digest());
     auto moved = std::move(content);
+    // ResolvedContent construction from an rvalue copies the retaining handle.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     CHECK(content.digest() == moved.digest());
     bindings.push_back({"A", moved, ""});
     c.external_content = bindings;

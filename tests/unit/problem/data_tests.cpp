@@ -211,6 +211,8 @@ TEST_CASE("external roles and known forcing remain explicit including zero stage
     const auto model = system({1, 0, 1});
     std::optional<ExternalInput> producer = KnownExternalSequence{{{3}, {-4}}};
     auto data = accepted(snapshot_external(std::move(producer), model));
+    // snapshot_external accepts the producer by const reference.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     std::get<KnownExternalSequence>(*producer).stages[0][0] = 99;
     CHECK(data.horizon() == 2);
     CHECK(data.dimension() == 1);
@@ -235,6 +237,8 @@ TEST_CASE("external roles and known forcing remain explicit including zero stage
     producer = AdversarialExternalInput{
         {UniversalSet{1}, UniversalSet{1}}, SetQuantifier::universal, "game/policy-information-v1"};
     auto adversary = accepted(snapshot_external(std::move(producer), model)).description();
+    // snapshot_external accepts the producer by const reference.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     std::get<AdversarialExternalInput>(*producer).semantics_reference = "changed";
     CHECK(std::get<AdversarialExternalInput>(**adversary).semantics_reference ==
           "game/policy-information-v1");
@@ -463,6 +467,8 @@ TEST_CASE("copied moved and assigned handles keep independent immutable reader o
         auto assigned = accepted(snapshot_controls(FiniteDomain{1, {{9}}}, system()));
         assigned = b;
         raw = FiniteDomain{1, {{100}}};
+        // ControlDomains construction from an rvalue copies the retaining handle.
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         CHECK(std::get<FiniteDomain>(*a.description()).catalogue == std::vector<Vector>{{-1}, {1}});
         return std::vector{b.description(), moved.description(), assigned.description()};
     }();
