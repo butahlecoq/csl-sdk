@@ -765,18 +765,19 @@ TEST_CASE("query setup diagnostics leave the completed coarse sweep available to
     const execution::ResourceUse invalid_query_resources{
         2, "exceeds policy lane", std::nullopt, execution::CallStopSupport::cooperative_boundaries};
 
+    const auto query_with_invalid_resources = [&](const ExecutionContext &query_context) {
+        return experiments::run_family_queries(std::move(sweep), selector, resources, query_context,
+                                               execution::Mode::sequential,
+                                               invalid_query_resources);
+    };
     auto changed_context = context;
     changed_context.run_id = "different-run";
-    auto mismatched =
-        experiments::run_family_queries(std::move(sweep), selector, resources, changed_context,
-                                        execution::Mode::sequential, invalid_query_resources);
+    auto mismatched = query_with_invalid_resources(changed_context);
     REQUIRE(std::holds_alternative<Diagnostics>(mismatched));
     CHECK(std::get<Diagnostics>(mismatched).front().field == "family_queries.run_id");
     REQUIRE(sweep.batch.tasks.size() == 1);
 
-    auto queried =
-        experiments::run_family_queries(std::move(sweep), selector, resources, context,
-                                        execution::Mode::sequential, invalid_query_resources);
+    auto queried = query_with_invalid_resources(context);
     REQUIRE(std::holds_alternative<Diagnostics>(queried));
     CHECK(std::get<Diagnostics>(queried).front().field == "execution.task.family-query-0.threads");
     REQUIRE(sweep.batch.tasks.size() == 1);
