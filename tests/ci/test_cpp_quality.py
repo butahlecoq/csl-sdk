@@ -194,6 +194,14 @@ class NativeQualityBoundaryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unregistered first-party compiler input"):
             quality.origin(path.resolve(), quality.corpus(self.root), self.build, [], [])
 
+    def test_isolated_probe_vendor_sources_honor_the_dependency_boundary(self) -> None:
+        source = quality.corpus(self.root)
+        vendor = self.build / "native-probes/_deps/dependency-src/library.cpp"
+        self.assertIsNone(quality.origin(vendor, source, self.build, [], []))
+        unexpected = self.build / "native-probes/unowned.cpp"
+        with self.assertRaisesRegex(ValueError, "Unregistered generated native source"):
+            quality.origin(unexpected, source, self.build, [], [])
+
     def test_modified_staged_header_is_not_current_source_qualification(self) -> None:
         prefix = self.build / "prefix"
         header = prefix / "include/csl/example.hpp"
