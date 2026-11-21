@@ -26,6 +26,8 @@ TEST_CASE("canonical convex publication owns objective bounds and original cost"
     std::get<QuadraticTerminal>(input.objective).Q.values[0] = 200;
     input.variables[0].upper = 99;
     const auto copy = std::move(p);
+    // ConvexProgram construction from an rvalue copies the retaining handle.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     CHECK(p.quadratic_program().hessian()(0, 0) == 2);
     CHECK(copy.quadratic_program().variables()[0].upper == 2);
     const auto e = accepted(evaluate_primal(copy, Vector{2}, tolerance, verifier));
