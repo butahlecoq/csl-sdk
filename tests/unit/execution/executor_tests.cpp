@@ -1127,7 +1127,9 @@ TEST_CASE("task publication validates identity declarations and freezes caller-o
     std::vector<ex::Task<CustomPort>> tasks{retained};
     auto batch = std::get<ex::BatchResult<CustomPort>>(
         e->run<CustomPort>(tasks, context(*e), ex::Mode::sequential));
-    CHECK(std::get<ex::Returned<CustomPort>>(batch.tasks[0].outcome).value == 42);
+    const auto result = std::get<ex::Returned<CustomPort>>(batch.tasks[0].outcome).value;
+    CHECK(result == 42);
+    CHECK(result != request + 1);
 }
 TEST_CASE(
     "two concurrent strategy tasks have separate LP identities and local one-two attempt histories") {
