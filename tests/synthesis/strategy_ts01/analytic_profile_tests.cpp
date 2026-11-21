@@ -573,7 +573,7 @@ TEST_CASE("republication cannot alter the optimum claim or either bound") {
 TEST_CASE("result boundary keeps its outcome and bounds aligned with sealed family evidence") {
     auto original = run(request(resolve(source())));
     REQUIRE(original.family);
-    const auto identity = original.family->identity();
+    const auto &identity = original.family->identity();
     CHECK(check_synthesis_result(original, identity).empty());
 
     auto changed_claim = original;
