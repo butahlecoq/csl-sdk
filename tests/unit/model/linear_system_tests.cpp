@@ -388,6 +388,8 @@ TEST_CASE("snapshots and coefficient records survive mutable aliases and produce
     CHECK(left.get() == Vector{15});
     CHECK(right.get() == Vector{18});
     auto moved_again = std::move(copy);
+    // LinearSystem construction from an rvalue copies the retaining handle.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     CHECK(accepted(copy.step({0}, Vector{2}, Vector{1}, Vector{2})) == Vector{15});
     CHECK(accepted(moved_again.step({0}, Vector{2}, Vector{1}, Vector{2})) == Vector{15});
 }

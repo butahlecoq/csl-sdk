@@ -296,6 +296,8 @@ TEST_CASE("retained objectives and metadata survive producer destruction and mov
     }();
     CHECK(accepted(evaluate(quadratic, Vector{3, 1})) == 8);
     auto moved = std::move(quadratic);
+    // Objective construction from an rvalue copies the retaining handle.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     CHECK(accepted(evaluate(quadratic, Vector{3, 1})) == 8);
     CHECK(accepted(evaluate(moved, Vector{3, 1})) == 8);
     auto metadata = moved.quadratic_checks();

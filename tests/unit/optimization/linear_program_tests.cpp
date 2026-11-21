@@ -51,6 +51,8 @@ TEST_CASE(
         return accepted(evaluate_primal(copy, Vector{0, 1}, tolerance, verifier)).objective;
     });
     CHECK(worker.get() == -2);
+    // LinearProgram construction from an rvalue copies the retaining handle.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     CHECK(accepted(evaluate_primal(p, Vector{0, 1}, tolerance, verifier)).objective == -2);
 }
 TEST_CASE("free fixed equality and empty dimensions preserve mathematical data") {
