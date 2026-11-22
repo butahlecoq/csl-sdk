@@ -18,4 +18,4 @@ Diagnostics check_resources(const ResourcePolicy &r) {
                  "Positive worker/thread counts must fit the single total thread budget"}};
     return {};
 }
-} // namespace csl
+}
