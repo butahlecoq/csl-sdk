@@ -177,6 +177,10 @@ jobs:
           pattern: cpp-quality-${{ github.sha }}-*
           path: build/native-quality-receipts
       - if: needs.cpp-quality-route.outputs.required == 'true' && needs.cpp-quality.result == 'success'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11.14'
+      - if: needs.cpp-quality-route.outputs.required == 'true' && needs.cpp-quality.result == 'success'
         name: Reject missing, stale or uncovered source/profile identities
         run: >-
           python scripts/ci/check_cpp_quality.py coverage
