@@ -102,3 +102,20 @@ jobs:
         run: |
           ctest --test-dir build/strategies -R '^(strategy_a_tests|direct_joint_strategy_tests|ipopt_convex_client)$' --output-on-failure --no-tests=error
           ctest --test-dir build/strategies -R '^native_history_feedback_bridge$' --output-on-failure --no-tests=error
+
+  validation:
+    name: SDK validation
+    if: always()
+    needs: [installed, sdk-profiles, casadi-strategies]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every supported SDK and control profile
+        env:
+          INSTALLED_RESULT: ${{ needs.installed.result }}
+          PROFILE_RESULT: ${{ needs.sdk-profiles.result }}
+          STRATEGY_RESULT: ${{ needs.casadi-strategies.result }}
+        run: |
+          test "$INSTALLED_RESULT" = success
+          test "$PROFILE_RESULT" = success
+          test "$STRATEGY_RESULT" = success
