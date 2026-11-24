@@ -87,4 +87,4 @@ Diagnostics check_nominal_profile(const Problem &p, bool requires_inverse, Assur
         unsupported("assurance", "No validated verifier is implemented in revision 1");
     return result;
 }
-} // namespace csl
+}

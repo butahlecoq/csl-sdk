@@ -485,4 +485,4 @@ Diagnostics check_synthesis_result(const SynthesisResult &result,
             "ScopedOperationStopped requires a matching stopped termination");
     return diagnostics;
 }
-} // namespace csl
+}

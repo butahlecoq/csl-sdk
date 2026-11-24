@@ -121,4 +121,4 @@ Diagnostics check_geometry_evidence(const GeometryEvidence &evidence,
     return check_geometry_binding(evidence, {request.identity, {request.input.id}},
                                   GeometryClaimScope::set_relation, request.assurance);
 }
-} // namespace csl
+}
