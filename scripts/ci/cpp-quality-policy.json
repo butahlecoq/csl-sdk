@@ -5,7 +5,8 @@
     "src",
     "tests",
     "examples",
-    "tools"
+    "tools",
+    "probes"
   ],
   "frozen": [],
   "expected_compile_failures": [
@@ -14,8 +15,6 @@
     "tests/installed/ts01_relation_factory_forge_client.cpp",
     "tests/installed/farkas_factory_forge_client.cpp"
   ],
-  "deferred_owners": [
-    "probes"
-  ],
-  "scope_note": "The gate covers installed headers, native implementation, tests, examples and SDK tools. The isolated dependency-probe project retains its separate build context."
+  "deferred_owners": [],
+  "scope_note": "The retained SDK covers public headers, implementation, tests, examples, tools and probes. Dependency probes run in their own CMake project."
 }
