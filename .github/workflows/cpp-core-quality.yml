@@ -10,6 +10,7 @@ on:
       - 'src/**'
       - 'tests/**'
       - 'examples/**'
+      - 'tools/**'
       - 'cmake/**'
       - 'CMakeLists.txt'
       - 'CMakePresets.json'
@@ -49,7 +50,7 @@ jobs:
             exit 0
           fi
           if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
-            include src tests examples cmake CMakeLists.txt CMakePresets.json \
+            include src tests examples tools cmake CMakeLists.txt CMakePresets.json \
             .clang-format .clang-tidy requirements-cpp-quality.txt \
             scripts/ci/check_cpp_quality.py scripts/ci/cpp-quality-policy.json \
             .github/workflows/cpp-core-quality.yml; then
@@ -120,6 +121,8 @@ jobs:
           -DCSL_ENABLE_HIGHS=${{ matrix.highs }} -DCSL_ENABLE_QHULL=${{ matrix.qhull }}
           -DCSL_ENABLE_CASADI=${{ matrix.casadi }} -Dcasadi_DIR="$CASADI_CMAKE_DIR"
           -DCSL_ENABLE_IPOPT=${{ matrix.ipopt }} -DIpopt_ROOT="$(dirname "$CASADI_CMAKE_DIR")"
+          -DCSL_BUILD_NOMINAL_TUBE_CAPTURE=${{ matrix.highs }}
+          -DCSL_BUILD_HISTORY_MEMBERSHIP_2D_EXAMPLE=${{ matrix.casadi }}
           -DPython3_EXECUTABLE="$(command -v python)"
       - name: Build the complete real profile serially
         run: cmake --build "$BUILD_ROOT" --parallel 1

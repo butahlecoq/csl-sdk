@@ -4,7 +4,8 @@
     "include",
     "src",
     "tests",
-    "examples"
+    "examples",
+    "tools"
   ],
   "frozen": [],
   "expected_compile_failures": [
@@ -14,8 +15,7 @@
     "tests/installed/farkas_factory_forge_client.cpp"
   ],
   "deferred_owners": [
-    "tools",
     "probes"
   ],
-  "scope_note": "The gate covers installed headers, native implementation, tests and shipped examples. The standalone tool and dependency-probe sources are tracked separately."
+  "scope_note": "The gate covers installed headers, native implementation, tests, examples and SDK tools. The isolated dependency-probe project retains its separate build context."
 }
