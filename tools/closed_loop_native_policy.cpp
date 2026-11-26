@@ -1205,6 +1205,12 @@ Json feedback_membership_json(const reachability::FeedbackSet &shape,
                                         return value.parallelotope_frame
                                             ->values[i * value.parallelotope_frame->cols + j];
                                     });
+                if (value.parallelotope_frame_bounds) {
+                    result["parallelotope_frame_lower"] =
+                        value.parallelotope_frame_bounds->first;
+                    result["parallelotope_frame_upper"] =
+                        value.parallelotope_frame_bounds->second;
+                }
                 return result;
             } else {
                 const auto &factor = [&]() -> const Matrix & {
@@ -1339,22 +1345,36 @@ Json feedback_export(const problem::ResolvedProblem &resolved, const Json &in,
     if (in.at("task_id") == "env717-earth-orbit/continuous-receding/1")
         strict.push_back({0, 0});
     const auto history_method = in.value("polytope_history", std::string{"stagewise"});
-    if (history_method != "stagewise" && history_method != "certified_whole_history")
+    auto polytope_history = FeedbackPolytopeHistory::stagewise;
+    if (history_method == "certified_whole_history")
+        polytope_history = FeedbackPolytopeHistory::certified_whole_history;
+    else if (history_method == "certified_stagewise")
+        polytope_history = FeedbackPolytopeHistory::certified_stagewise;
+    else if (history_method != "stagewise")
         throw std::runtime_error("unknown polytope history method");
-    const auto polytope_history = history_method == "certified_whole_history"
-                                      ? FeedbackPolytopeHistory::certified_whole_history
-                                      : FeedbackPolytopeHistory::stagewise;
+    const auto frame_rule_name = in.value("parallelotope_frame_rule", std::string{"axis"});
+    auto frame_rule = ParallelotopeFrameRule::axis;
+    if (frame_rule_name == "fixed-rotation-45")
+        frame_rule = ParallelotopeFrameRule::fixed_rotation_45;
+    else if (frame_rule_name == "support-selected")
+        frame_rule = ParallelotopeFrameRule::support_selected;
+    else if (frame_rule_name != "axis")
+        throw std::runtime_error("unknown parallelotope frame rule");
     auto outcome = feedback_geometry(
         resolved, {in.at("request_id").get<std::string>()}, terminal.as_handle(), found->second,
         strict,
         {{forward, intersection}, feedback_provider(lp, "csl.program-result.v1"), max_generators},
-        polytope_history, {});
+        FeedbackGeometryOptions{polytope_history, frame_rule}, {});
     const auto *failure = std::get_if<FeedbackGeometryFailure>(&outcome);
     const auto &geometry = failure ? failure->prefix : std::get<FeedbackGeometry>(outcome);
     Json result{{"family", name},
                 {"scope", "forward_relevant_from_observation"},
                 {"status", failure ? "stopped" : "complete"},
                 {"stages", Json::array()}};
+    if (polytope_history == FeedbackPolytopeHistory::certified_stagewise)
+        result["polytope_history"] = history_method;
+    if (found->second == FeedbackFamily::parallelotope)
+        result["parallelotope_frame_rule"] = std::string(parallelotope_frame_rule_name(frame_rule));
     for (const auto &row : geometry.stages)
         result["stages"].push_back(feedback_stage_json(row, n));
     if (failure) {
@@ -1782,23 +1802,67 @@ NativeMembership native_history_membership(const Json &member, const std::string
     if (family == "polytope")
         return {HistorySetFamily::polytope, feedback_h_membership(member, id, n),
                 HistoryHWitness{}};
-    auto [lower, upper] = history_axis_bounds(member, n);
     if (family == "parallelotope") {
         auto frame = matrix(member.at("parallelotope_frame"));
-        // Current feedback producer exports its axis frame. A nonaxis frame
-        // requires bounds and witnesses in that frame before it can be admitted.
-        Matrix axis{n, n, Vector(n * n, 0)};
-        for (std::size_t i = 0; i < n; ++i)
-            axis.values[i * n + i] = 1;
-        if (frame.rows != n || frame.cols != n || frame.values != axis.values)
-            throw std::runtime_error("Native feedback parallelotope requires the axis frame.");
+        if (frame.rows != n || frame.cols != n || frame.values.size() != n * n)
+            throw std::runtime_error("Native feedback parallelotope frame has the wrong shape.");
+        // The producer certifies factor bounds for x = frame * factor (center
+        // zero). A nonaxis frame is admitted only with exported bounds and an
+        // orthonormal basis, so the state witness is frame^T * state.
+        const bool has_frame_bounds = member.contains("parallelotope_frame_lower") &&
+                                      member.contains("parallelotope_frame_upper");
+        if (!has_frame_bounds) {
+            Matrix axis{n, n, Vector(n * n, 0)};
+            for (std::size_t i = 0; i < n; ++i)
+                axis.values[i * n + i] = 1;
+            if (frame.values != axis.values)
+                throw std::runtime_error("Native feedback parallelotope without exported frame "
+                                         "bounds requires the axis frame.");
+        } else {
+            for (std::size_t i = 0; i < n; ++i) {
+                double norm = 0;
+                for (std::size_t j = 0; j < n; ++j)
+                    norm += frame.values[j * n + i] * frame.values[j * n + i];
+                if (!(std::abs(norm - 1.0) <= 1e-9))
+                    throw std::runtime_error(
+                        "Native feedback parallelotope requires unit frame columns.");
+                for (std::size_t k = i + 1; k < n; ++k) {
+                    double dot = 0;
+                    for (std::size_t j = 0; j < n; ++j)
+                        dot += frame.values[j * n + i] * frame.values[j * n + k];
+                    if (!(std::abs(dot) <= 1e-9))
+                        throw std::runtime_error(
+                            "Native feedback parallelotope requires orthogonal frame columns.");
+                }
+            }
+        }
+        auto [lower, upper] =
+            has_frame_bounds
+                ? std::pair{vector(member.at("parallelotope_frame_lower")),
+                            vector(member.at("parallelotope_frame_upper"))}
+                : history_axis_bounds(member, n);
+        if (lower.size() != n || upper.size() != n)
+            throw std::runtime_error("Native feedback parallelotope bounds have the wrong size.");
+        Vector center(n, 0);
+        if (supplied_factor.empty()) {
+            Vector coefficients(n, 0);
+            for (std::size_t i = 0; i < n; ++i) {
+                double value = 0;
+                for (std::size_t j = 0; j < n; ++j)
+                    value += frame.values[j * n + i] * (state[j] - center[j]);
+                coefficients[i] = value;
+            }
+            return {HistorySetFamily::parallelotope,
+                    HistoryParallelotopeMembership{std::move(center), std::move(frame),
+                                                   std::move(lower), std::move(upper)},
+                    HistoryParallelotopeWitness{std::move(coefficients)}};
+        }
         return {HistorySetFamily::parallelotope,
-                HistoryParallelotopeMembership{Vector(n, 0), std::move(frame), std::move(lower),
-                                               std::move(upper)},
-                HistoryParallelotopeWitness{supplied_factor.empty()
-                                                ? Vector(state.begin(), state.end())
-                                                : std::move(supplied_factor)}};
+                HistoryParallelotopeMembership{std::move(center), std::move(frame),
+                                               std::move(lower), std::move(upper)},
+                HistoryParallelotopeWitness{std::move(supplied_factor)}};
     }
+    auto [lower, upper] = history_axis_bounds(member, n);
     Vector center(n), radii(n), coefficients(n);
     for (std::size_t i = 0; i < n; ++i) {
         center[i] = std::midpoint(lower[i], upper[i]);
@@ -2642,6 +2706,10 @@ Json query(const Json &in) {
          in.contains("candidate_action_indices")
              ? "declared full-horizon candidate histories only; coverage against the complete action product is reported separately; no nonlinear global-feedback claim"
              : "finite action catalogue and declared numerical affine predictor; no nonlinear global-feedback claim"}};
+    if (const auto *plan_score = std::get_if<optimization::NominalPlanScored>(
+            &selected->attempts.at(selected->selected_attempt));
+        plan_score && !plan_score->terminal_scorer.empty())
+        base["selector"]["terminal_scorer"] = std::string(plan_score->terminal_scorer);
     base["query_receipt"] = {{"schema", "csl.closed-loop.native-policy-query-receipt/1"},
                              {"task_id", in.at("task_id")},
                              {"task_sha256", in.at("task_sha256")},
