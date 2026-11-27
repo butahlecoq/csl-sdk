@@ -113,6 +113,8 @@ for family in ("box", "parallelotope", "zonotope", "ellipsoid"):
     )
     [export] = exchange([options])
     assert export["status"] == "exported", export
+    assert export["geometry"]["polytope_history"] == "stagewise", export
+    assert export["geometry"]["route"] == "stagewise", export
     members = [
         member
         for stage in export["geometry"]["stages"]
@@ -170,6 +172,25 @@ for family in ("box", "parallelotope", "zonotope", "ellipsoid"):
                 ]
             )
             assert round_trip["status"] == "solved", round_trip
+
+certified = dict(
+    request,
+    geometry_family="polytope",
+    polytope_history="certified_stagewise",
+    geometry_max_generators=32,
+)
+[certified_export] = exchange([certified])
+assert certified_export["status"] == "exported", certified_export
+certified_geometry = certified_export["geometry"]
+assert certified_geometry["polytope_history"] == "certified_stagewise", certified_geometry
+assert (
+    certified_geometry["route"] == "certified_stagewise_projection"
+), certified_geometry
+assert certified_geometry["stages"], certified_geometry
+for stage in certified_geometry["stages"]:
+    for member in stage["memberships"]:
+        assert member["relation"] == "outer", member
+        assert member["assurance"] == "numerical", member
 
 orbit = dict(
     request,

@@ -232,6 +232,18 @@ double outward_lower(const exact_h::ExactRational &value, std::size_t max_bits) 
     return bracket.lower;
 }
 
+double outward_upper(const exact_h::ExactRational &value, std::size_t max_bits) {
+    const auto bracket = exact_h::bracket_binary64(value, max_bits);
+    if (bracket.status == exact_h::Binary64BracketStatus::arithmetic_budget)
+        throw Failure{
+            OperationStopped{StopReason::resource_limit,
+                             "Exact control bound comparison exceeded its arithmetic budget."}};
+    if (bracket.status != exact_h::Binary64BracketStatus::finite)
+        bad("feedback.control.bounds",
+            "A finite binary64 control carrier could not be represented.");
+    return bracket.upper;
+}
+
 struct ExactCancellation {
     const ExecutionContext &context;
     bool stop_requested() const {
@@ -620,7 +632,57 @@ std::vector<enclosure::Interval> exact_successor_box(const model::DynamicsStage 
     return result;
 }
 
-std::optional<std::vector<enclosure::Interval>> exact_unit_normal_box(const SetHandle &input,
+// Propagate one exact affine carrier and round its rational bounds outward
+// into the binary64 carrier used by the provider-facing pipeline.
+std::vector<enclosure::Interval> exact_carrier_successor(
+    const model::DynamicsStage &dynamics, std::span<const double> state_lo,
+    std::span<const double> state_hi, std::span<const double> control_lo,
+    std::span<const double> control_hi, Vector &next_lo, Vector &next_hi) {
+    enclosure::Budget budget;
+    std::vector<enclosure::Interval> state_box, control_box;
+    for (std::size_t i = 0; i < state_lo.size(); ++i)
+        state_box.push_back(exact_interval(state_lo[i], state_hi[i], budget));
+    for (std::size_t i = 0; i < control_lo.size(); ++i)
+        control_box.push_back(exact_interval(control_lo[i], control_hi[i], budget));
+    auto box = exact_successor_box(dynamics, state_box, control_box, budget);
+    for (std::size_t i = 0; i < next_lo.size(); ++i) {
+        const auto &lo = box[i].lower;
+        const auto &hi = box[i].upper;
+        next_lo[i] = outward_lower({lo.numerator, lo.denominator, lo.binary_exponent},
+                                   budget.max_integer_bits);
+        next_hi[i] = outward_upper({hi.numerator, hi.denominator, hi.binary_exponent},
+                                   budget.max_integer_bits);
+    }
+    return box;
+}
+
+std::optional<enclosure::Rational> exact_quotient(const enclosure::Rational &value,
+                                                  const enclosure::Rational &divisor,
+                                                  enclosure::Budget &budget) {
+    if (exact_h::exact_detail::is_zero(divisor.numerator))
+        return std::nullopt;
+    const auto exponent =
+        static_cast<std::int64_t>(value.binary_exponent) - divisor.binary_exponent;
+    if (exponent < std::numeric_limits<int>::min() ||
+        exponent > std::numeric_limits<int>::max())
+        return std::nullopt;
+    enclosure::Rational result;
+    if (!exact_h::exact_detail::multiply(value.numerator, divisor.denominator,
+                                         budget.max_integer_bits, result.numerator) ||
+        !exact_h::exact_detail::multiply(value.denominator, divisor.numerator,
+                                         budget.max_integer_bits, result.denominator))
+        return std::nullopt;
+    result.binary_exponent = static_cast<int>(exponent);
+    if (!rational::normalize(result, budget))
+        return std::nullopt;
+    return result;
+}
+
+// Accept an H set whose inequalities are all axis-aligned, including rows with
+// non-unit coefficients. Return the exact closed coordinate box. The caller
+// only needs this box to bound an outer support computation, so a superset is
+// harmless; every derived bound is still computed in exact rational arithmetic.
+std::optional<std::vector<enclosure::Interval>> exact_axis_aligned_box(const SetHandle &input,
                                                                       enclosure::Budget &budget) {
     const auto data = import(input);
     const auto representation = data.representation();
@@ -629,34 +691,47 @@ std::optional<std::vector<enclosure::Interval>> exact_unit_normal_box(const SetH
         return std::nullopt;
 
     const auto dimension = h->inequalities.cols();
-    Vector lower(dimension, -std::numeric_limits<double>::infinity());
-    Vector upper(dimension, std::numeric_limits<double>::infinity());
+    std::vector<std::optional<enclosure::Rational>> lower(dimension), upper(dimension);
     for (std::size_t row = 0; row < h->inequalities.rows(); ++row) {
         std::size_t axis = dimension;
-        double sign = 0;
         for (std::size_t column = 0; column < dimension; ++column) {
-            const auto coefficient = h->inequalities(row, column);
-            if (coefficient == 0)
+            if (h->inequalities(row, column) == 0)
                 continue;
-            if (axis != dimension || (coefficient != 1 && coefficient != -1))
+            if (axis != dimension)
                 return std::nullopt;
             axis = column;
-            sign = coefficient;
         }
         if (axis == dimension)
             return std::nullopt;
-        if (sign > 0)
-            upper[axis] = std::min(upper[axis], h->upper_bounds[row]);
-        else
-            lower[axis] = std::max(lower[axis], -h->upper_bounds[row]);
+        const auto coefficient = h->inequalities(row, axis);
+        enclosure::Rational rhs, scale;
+        if (!rational::from_binary64(h->upper_bounds[row], rhs, budget) ||
+            !rational::from_binary64(coefficient, scale, budget))
+            return std::nullopt;
+        auto bound = exact_quotient(rhs, scale, budget);
+        if (!bound)
+            return std::nullopt;
+        auto &slot = coefficient > 0 ? upper[axis] : lower[axis];
+        if (!slot) {
+            slot = std::move(*bound);
+            continue;
+        }
+        int order{};
+        if (!rational::compare(*slot, *bound, order, budget))
+            return std::nullopt;
+        if ((coefficient > 0 && order > 0) || (coefficient < 0 && order < 0))
+            slot = std::move(*bound);
     }
 
     std::vector<enclosure::Interval> box;
     box.reserve(dimension);
     for (std::size_t axis = 0; axis < dimension; ++axis) {
-        if (!std::isfinite(lower[axis]) || !std::isfinite(upper[axis]) || lower[axis] > upper[axis])
+        if (!lower[axis] || !upper[axis])
             return std::nullopt;
-        box.push_back(exact_interval(lower[axis], upper[axis], budget));
+        int order{};
+        if (!rational::compare(*lower[axis], *upper[axis], order, budget) || order > 0)
+            return std::nullopt;
+        box.push_back({std::move(*lower[axis]), std::move(*upper[axis])});
     }
     return box;
 }
@@ -711,13 +786,13 @@ double exact_prefix_support(std::span<const model::DynamicsStage> dynamics,
     return bracket.upper;
 }
 
-bool affine_box_history_geometry(FeedbackGeometry &output, Runner &run,
-                                 const model::LinearSystem &system,
-                                 const std::vector<SetHandle> &states,
-                                 const std::vector<SetHandle> &controls, const SetHandle &terminal,
-                                 const Vector &initial, const std::vector<std::string> &labels,
-                                 const std::vector<StrictCoordinateLowerBound> &strict,
-                                 StageIndex &active) {
+bool try_affine_box_history_geometry(FeedbackGeometry &output, Runner &run,
+                                     const model::LinearSystem &system,
+                                     const std::vector<SetHandle> &states,
+                                     const std::vector<SetHandle> &controls, const SetHandle &terminal,
+                                     const Vector &initial, const std::vector<std::string> &labels,
+                                     const std::vector<StrictCoordinateLowerBound> &strict,
+                                     StageIndex &active) {
     const auto unrestricted = [](const SetHandle &set) {
         const auto data = import(set);
         const auto representation = data.representation();
@@ -732,7 +807,7 @@ bool affine_box_history_geometry(FeedbackGeometry &output, Runner &run,
     std::vector<model::DynamicsStage> stages;
     for (std::size_t k = 0; k < controls.size(); ++k) {
         check_exact_history_stop(run.context);
-        auto box = exact_unit_normal_box(controls[k], budget);
+        auto box = exact_axis_aligned_box(controls[k], budget);
         if (!box)
             return false;
         boxes.push_back(std::move(*box));
@@ -763,12 +838,15 @@ bool affine_box_history_geometry(FeedbackGeometry &output, Runner &run,
             add_support(std::move(normal));
         }
         for (std::size_t axis = 0; axis + 1 < n; axis += 2) {
+            // The axis normals already pin each coordinate from both sides, so
+            // the sum directions add nothing. Difference directions describe
+            // the correlation between neighbouring coordinates instead.
             Vector normal(n, 0);
             normal[axis] = 1;
-            normal[axis + 1] = 1;
+            normal[axis + 1] = -1;
             add_support(normal);
             normal[axis] = -1;
-            normal[axis + 1] = -1;
+            normal[axis + 1] = 1;
             add_support(std::move(normal));
         }
         marginals.push_back(std::move(rows));
@@ -802,15 +880,50 @@ bool affine_box_history_geometry(FeedbackGeometry &output, Runner &run,
         assign("affine-box-forward", "Outer H template of the affine forward marginal.",
                stage.forward_h, stage.forward);
         assign("affine-box-backward",
-               "Every forward history has an admissible continuation to the universal terminal.",
+               "Outer H template of the affine backward marginal; every forward history has an admissible continuation to the universal terminal.",
                stage.backward_h, stage.backward);
         assign("affine-box-intersection",
-               "The forward-relevant intersection equals the affine forward marginal.",
+               "Outer H template of the forward-relevant intersection, which is the affine forward marginal when the closed state and terminal sets are universal.",
                stage.intersection_h, stage.intersection);
         stage.forward_embedding_h = stage.forward_h->output;
         stage.backward_embedding_h = stage.backward_h->output;
     }
     return true;
+}
+
+// Append I*x_k - A*x_{k-1} - B*u_{k-1} = offset for one transition. The caller
+// chooses where the three variable blocks sit inside the relation.
+void append_successor_equalities(Rows &rows, const model::DynamicsStage &dynamics,
+                                 std::size_t state_offset, std::size_t control_offset,
+                                 std::size_t next_offset) {
+    for (std::size_t i = 0; i < dynamics.A.rows(); ++i) {
+        Vector row(rows.a.cols, 0);
+        for (std::size_t j = 0; j < dynamics.A.cols(); ++j)
+            row[state_offset + j] = -dynamics.A(i, j);
+        for (std::size_t j = 0; j < dynamics.B.cols(); ++j)
+            row[control_offset + j] = -dynamics.B(i, j);
+        row[next_offset + i] = 1;
+        rows.append(std::move(row), dynamics.offset[i], true);
+    }
+}
+
+// Forward successor relation over (x_k, u_k, x_{k+1}).
+Rows successor_relation(std::size_t n, std::size_t m, const SetHandle &state,
+                        const SetHandle &control, const model::DynamicsStage &dynamics) {
+    Rows relation(2 * n + m);
+    relation.add(import(state), 0);
+    relation.add(import(control), n);
+    append_successor_equalities(relation, dynamics, 0, n, n + m);
+    return relation;
+}
+
+// Backward predecessor relation over (x_k, u_k, x_{k+1}).
+Rows predecessor_relation(std::size_t n, std::size_t m, const SetHandle &state,
+                          const SetHandle &control, const SetHandle &next,
+                          const model::DynamicsStage &dynamics) {
+    auto relation = successor_relation(n, m, state, control, dynamics);
+    relation.add(import(next), n + m);
+    return relation;
 }
 
 OperationResult certified_history_projection(Runner &run, const Rows &source, std::size_t first,
@@ -820,6 +933,9 @@ OperationResult certified_history_projection(Runner &run, const Rows &source, st
     const auto dimension = box.size();
     const auto variables = source.a.cols;
     exact_h::Limits limits;
+    if (first > variables || dimension > variables - first)
+        bad("feedback.projection-offset",
+            "The projected variable block lies outside the source relation.");
     if (source.a.rows > limits.max_rows || source.e.rows > limits.max_rows - source.a.rows)
         exact_history_limit("The exact history relation exceeded the row limit.");
     std::vector<exact_h::Row> bounds, equations;
@@ -926,15 +1042,7 @@ void certified_history_geometry(FeedbackGeometry &output, Runner &run,
             for (std::size_t j = 0; j < m; ++j)
                 control_box.push_back(exact_interval(lo[j], hi[j], budget));
             boxes[k] = exact_successor_box(dynamics, boxes[k - 1], control_box, budget);
-            for (std::size_t i = 0; i < n; ++i) {
-                Vector row(history.a.cols, 0);
-                for (std::size_t j = 0; j < n; ++j)
-                    row[(k - 1) * n + j] = -dynamics.A(i, j);
-                for (std::size_t j = 0; j < m; ++j)
-                    row[control_offset + j] = -dynamics.B(i, j);
-                row[k * n + i] = 1;
-                history.append(std::move(row), dynamics.offset[i], true);
-            }
+            append_successor_equalities(history, dynamics, (k - 1) * n, control_offset, k * n);
         }
         stage.forward_h = certified_history_projection(run, history, k * n, boxes[k], labels,
                                                        "whole-history-prefix", inputs);
@@ -977,7 +1085,7 @@ void certified_history_geometry(FeedbackGeometry &output, Runner &run,
             OperationResult{std::move(set), SetRelation::outer, std::move(evidence)};
         stage.intersection = save(
             *stage.intersection_h, {stage.forward->id, stage.backward->id},
-            "Terminal-feasible histories already satisfy the forward prefix and define the exact overlap.");
+            "The outer backward marginal encloses the terminal-feasible intersection with the forward prefix.");
     }
 }
 
@@ -1033,6 +1141,12 @@ FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem &resolv
                 bad("feedback.polytope-history",
                     "Certified whole-history projection requires the polytope family.");
             preflight_exact_history(n, m, horizon, source->states, continuous->stages, terminal);
+        } else if (polytope_history == FeedbackPolytopeHistory::certified_stagewise) {
+            check_exact_history_stop(context);
+            if (family != FeedbackFamily::polytope)
+                bad("feedback.polytope-history",
+                    "Certified stagewise projection requires the polytope family.");
+            preflight_exact_history(n, m, horizon, source->states, continuous->stages, terminal);
         }
         std::vector<SetHandle> states, controls;
         for (const auto &item : source->states)
@@ -1062,6 +1176,7 @@ FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem &resolv
             output.stages.push_back(std::move(stage));
         }
         if (polytope_history == FeedbackPolytopeHistory::certified_whole_history) {
+            output.route = FeedbackGeometryRoute::certified_whole_history;
             certified_history_geometry(output, run, system, states, controls, terminal_h, initial,
                                        labels, strict, active, phase);
             check_exact_history_stop(context);
@@ -1073,13 +1188,14 @@ FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem &resolv
         Vector carrier_lo = initial, carrier_hi = initial;
         const bool certified_stagewise =
             polytope_history == FeedbackPolytopeHistory::certified_stagewise;
-        if (certified_stagewise && family != FeedbackFamily::polytope)
-            bad("feedback.polytope-history",
-                "Certified stagewise projection requires the polytope family.");
+        if (certified_stagewise)
+            output.route = FeedbackGeometryRoute::certified_stagewise_projection;
         if (certified_stagewise &&
-            affine_box_history_geometry(output, run, system, states, controls, terminal_h, initial,
-                                        labels, strict, active))
+            try_affine_box_history_geometry(output, run, system, states, controls, terminal_h,
+                                            initial, labels, strict, active)) {
+            output.route = FeedbackGeometryRoute::certified_stagewise_affine_box;
             return output;
+        }
         std::vector<Vector> lower(horizon + 1), upper(horizon + 1);
         std::vector<SetHandle> forward_embeddings;
         forward_embeddings.reserve(horizon + 1);
@@ -1110,26 +1226,8 @@ FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem &resolv
                          {}});
                 std::vector<enclosure::Interval> exact_box;
                 if (certified_stagewise) {
-                    enclosure::Budget budget;
-                    std::vector<enclosure::Interval> state_box, control_box;
-                    for (std::size_t i = 0; i < n; ++i)
-                        state_box.push_back(exact_interval(carrier_lo[i], carrier_hi[i], budget));
-                    for (std::size_t i = 0; i < m; ++i)
-                        control_box.push_back(exact_interval(ulo[i], uhi[i], budget));
-                    exact_box = exact_successor_box(dynamics, state_box, control_box, budget);
-                    for (std::size_t i = 0; i < n; ++i) {
-                        const auto &lo = exact_box[i].lower;
-                        const auto &hi = exact_box[i].upper;
-                        carrier_lo[i] =
-                            outward_lower({lo.numerator, lo.denominator, lo.binary_exponent},
-                                          budget.max_integer_bits);
-                        auto negative_hi = hi.numerator;
-                        if (!negative_hi.words.empty())
-                            negative_hi.negative = !negative_hi.negative;
-                        carrier_hi[i] =
-                            -outward_lower({negative_hi, hi.denominator, hi.binary_exponent},
-                                           budget.max_integer_bits);
-                    }
+                    exact_box = exact_carrier_successor(dynamics, carrier_lo, carrier_hi, ulo, uhi,
+                                                        carrier_lo, carrier_hi);
                 } else {
                     auto box = propagate_existential_control_box(dynamics, {carrier_lo, carrier_hi},
                                                                  {ulo, uhi}, context);
@@ -1146,18 +1244,7 @@ FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem &resolv
                         throw Failure{
                             OperationStopped{StopReason::resource_limit,
                                              "Joint state/control dimension overflowed."}};
-                    Rows joint(2 * n + m);
-                    joint.add(import(selected_h), 0);
-                    joint.add(import(controls[k - 1]), n);
-                    for (std::size_t i = 0; i < n; ++i) {
-                        Vector row(2 * n + m, 0);
-                        for (std::size_t j = 0; j < n; ++j)
-                            row[j] = -dynamics.A(i, j);
-                        for (std::size_t j = 0; j < m; ++j)
-                            row[n + j] = -dynamics.B(i, j);
-                        row[n + m + i] = 1;
-                        joint.append(std::move(row), dynamics.offset[i], true);
-                    }
+                    auto joint = successor_relation(n, m, selected_h, controls[k - 1], dynamics);
                     if (certified_stagewise) {
                         selected_h =
                             certified_history_projection(run, joint, n + m, exact_box, labels,
@@ -1219,7 +1306,9 @@ FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem &resolv
                     "Observed singleton and physical state intersection.");
             else if (family == FeedbackFamily::polytope)
                 stage.forward->construction.push_back(
-                    "Full joint H state/control relation projected through the selected provider.");
+                    certified_stagewise
+                        ? "Exact Fourier-Motzkin projection of the joint H state/control relation, followed by provider intersections with the authored state and carrier."
+                        : "Full joint H state/control relation projected through the selected provider.");
             else if (family == FeedbackFamily::zonotope)
                 stage.forward->construction.push_back(
                     "Native finite-plan zonotope one-step kernel, with the complete continuous control cover mapped through B as independent existential factors.");
@@ -1252,19 +1341,8 @@ FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem &resolv
                     throw Failure{Unsupported{{*e}}};
                 auto dynamics = std::get<model::DynamicsStage>(std::move(dynamics_result));
                 if (certified_stagewise) {
-                    Rows joint(2 * n + m);
-                    joint.add(import(backward.output), 0);
-                    joint.add(import(controls[k]), n);
-                    joint.add(import(next_backward), n + m);
-                    for (std::size_t i = 0; i < n; ++i) {
-                        Vector row(2 * n + m, 0);
-                        for (std::size_t j = 0; j < n; ++j)
-                            row[j] = -dynamics.A(i, j);
-                        for (std::size_t j = 0; j < m; ++j)
-                            row[n + j] = -dynamics.B(i, j);
-                        row[n + m + i] = 1;
-                        joint.append(std::move(row), dynamics.offset[i], true);
-                    }
+                    auto joint = predecessor_relation(n, m, backward.output, controls[k],
+                                                      next_backward, dynamics);
                     enclosure::Budget budget;
                     std::vector<enclosure::Interval> box;
                     for (std::size_t i = 0; i < n; ++i)
@@ -1324,9 +1402,11 @@ FeedbackGeometryOutcome feedback_geometry(const problem::ResolvedProblem &resolv
                 stage.backward->source_sets.push_back(*next_backward_family);
             next_backward_family = stage.backward->id;
             stage.backward->construction.push_back(
-                family == FeedbackFamily::polytope
-                    ? "Projected full-state H predecessor with forward-relevant carrier."
-                    : "Projected full-state H predecessor enclosed by a coarse axis family cover within the forward-relevant carrier.");
+                certified_stagewise
+                    ? "Exact Fourier-Motzkin projection of the joint predecessor relation, followed by provider intersections with the forward-relevant carrier."
+                    : (family == FeedbackFamily::polytope
+                           ? "Projected full-state H predecessor with forward-relevant carrier."
+                           : "Projected full-state H predecessor enclosed by a coarse axis family cover within the forward-relevant carrier."));
             phase = FeedbackGeometryPhase::intersection;
             auto full_intersection =
                 run.intersect(forward_embeddings[k], next_backward, "full-state-intersection");

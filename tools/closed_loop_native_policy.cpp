@@ -1304,6 +1304,21 @@ Json feedback_stage_json(const reachability::FeedbackGeometryStage &stage, std::
     return result;
 }
 
+const char *feedback_route_name(reachability::FeedbackGeometryRoute route) {
+    using Route = reachability::FeedbackGeometryRoute;
+    switch (route) {
+    case Route::stagewise:
+        return "stagewise";
+    case Route::certified_whole_history:
+        return "certified_whole_history";
+    case Route::certified_stagewise_affine_box:
+        return "certified_stagewise_affine_box";
+    case Route::certified_stagewise_projection:
+        return "certified_stagewise_projection";
+    }
+    return "stagewise";
+}
+
 Json feedback_export(const problem::ResolvedProblem &resolved, const Json &in,
                      const sets::SetData &terminal, std::size_t n) {
     using namespace reachability;
@@ -1356,9 +1371,9 @@ Json feedback_export(const problem::ResolvedProblem &resolved, const Json &in,
     Json result{{"family", name},
                 {"scope", "forward_relevant_from_observation"},
                 {"status", failure ? "stopped" : "complete"},
+                {"polytope_history", history_method},
+                {"route", feedback_route_name(geometry.route)},
                 {"stages", Json::array()}};
-    if (polytope_history == FeedbackPolytopeHistory::certified_stagewise)
-        result["polytope_history"] = history_method;
     for (const auto &row : geometry.stages)
         result["stages"].push_back(feedback_stage_json(row, n));
     if (failure) {
