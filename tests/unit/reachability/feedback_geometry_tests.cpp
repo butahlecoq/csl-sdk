@@ -40,18 +40,22 @@ csl::registry::PreparedProvider<Port> selected(csl::registry::Registration<Port>
         csl::registry::select_provider(providers, method, requirements)));
 }
 
-csl::SetHandle box(std::string id, csl::Vector lower, csl::Vector upper) {
+csl::SetHandle scaled_box(std::string id, csl::Vector lower, csl::Vector upper,
+                          const csl::Vector &scales) {
     using namespace csl;
     const auto dimension = lower.size();
-    if (dimension != upper.size())
-        throw std::runtime_error("Invalid box dimensions.");
+    if (dimension != upper.size() || dimension != scales.size())
+        throw std::runtime_error("Invalid scaled box dimensions.");
     Matrix rows{2 * dimension, dimension, Vector(2 * dimension * dimension, 0.0)};
     Vector rhs(2 * dimension, 0.0);
     for (std::size_t coordinate = 0; coordinate < dimension; ++coordinate) {
-        rows.values[(2 * coordinate) * dimension + coordinate] = 1.0;
-        rhs[2 * coordinate] = upper[coordinate];
-        rows.values[(2 * coordinate + 1) * dimension + coordinate] = -1.0;
-        rhs[2 * coordinate + 1] = -lower[coordinate];
+        const auto scale = scales[coordinate];
+        if (scale <= 0)
+            throw std::runtime_error("Scaled box coefficients must be positive.");
+        rows.values[(2 * coordinate) * dimension + coordinate] = scale;
+        rhs[2 * coordinate] = scale * upper[coordinate];
+        rows.values[(2 * coordinate + 1) * dimension + coordinate] = -scale;
+        rhs[2 * coordinate + 1] = -scale * lower[coordinate];
     }
     std::vector<std::string> labels;
     if (dimension == 2)
@@ -64,6 +68,12 @@ csl::SetHandle box(std::string id, csl::Vector lower, csl::Vector upper) {
                               take(numeric::snapshot(Matrix{0, dimension, {}})),
                               take(numeric::snapshot_vector({}))}))
         .as_handle();
+}
+
+csl::SetHandle box(std::string id, csl::Vector lower, csl::Vector upper) {
+    const auto dimension = lower.size();
+    return scaled_box(std::move(id), std::move(lower), std::move(upper),
+                      csl::Vector(dimension, 1.0));
 }
 
 bool contains(const csl::sets::HRepresentation &h, const csl::Vector &point) {
@@ -199,6 +209,67 @@ bool orbit_midpoint_survives_certified_projection(
             }
         }
     }
+    const auto stagewise_outcome =
+        feedback_geometry(resolved, {"orbit-suffix-18-stagewise"}, universal,
+                          FeedbackFamily::polytope, {{0, 0}}, dependencies,
+                          FeedbackPolytopeHistory::certified_stagewise, {});
+    const auto *stagewise = std::get_if<FeedbackGeometry>(&stagewise_outcome);
+    if (!stagewise ||
+        stagewise->route != FeedbackGeometryRoute::certified_stagewise_affine_box ||
+        stagewise->stages.size() != midpoint.size())
+        return false;
+    for (std::size_t k = 0; k < midpoint.size(); ++k) {
+        const auto &stage = stagewise->stages[k];
+        for (const auto *set : {&stage.forward, &stage.backward, &stage.intersection}) {
+            if (!*set || (*set)->assurance != Assurance::validated ||
+                (*set)->relation != SetRelation::outer ||
+                !axis_membership_contains((*set)->membership, midpoint[k]))
+                return false;
+        }
+    }
+    return true;
+}
+
+bool certified_stagewise_accepts_scaled_box_controls(
+    const csl::reachability::FeedbackGeometryDependencies &dependencies) {
+    using namespace csl;
+    using namespace csl::reachability;
+    const auto model = std::make_shared<const SystemModel>(SystemModel{
+        {{2, 2, 0},
+         TimeDomain::discrete,
+         std::vector<LinearStage>{
+             {{2, 2, {1, 0, 0, 1}}, {2, 2, {1, 0, 0, 1}}, {2, 0, {}}, {0, 0}}}},
+        {}});
+    const auto universal = take(sets::make_universal({{"scaled-state"}, 2, {}})).as_handle();
+    const auto control = scaled_box("scaled-control", {-0.2, -0.1}, {0.3, 0.2}, {2.0, 3.5});
+    const Problem source{{"scaled-box"},
+                         model,
+                         {0, 1},
+                         KnownInitial{{0.2, 0.4}},
+                         ContinuousDomain{{control}},
+                         {universal, universal},
+                         {},
+                         {},
+                         InformationPattern::nominal_open_loop,
+                         QuadraticTerminal{{2, 2, {2, 0, 0, 2}}, {0, 0}, 0}};
+    const auto resolved = take(problem::resolve(
+        source, {problem::UncertaintyStructure::stage_product_uncoupled, {}, {}}));
+    const auto outcome = feedback_geometry(resolved, {"scaled-box"}, universal,
+                                           FeedbackFamily::polytope, {}, dependencies,
+                                           FeedbackPolytopeHistory::certified_stagewise, {});
+    const auto *geometry = std::get_if<FeedbackGeometry>(&outcome);
+    if (!geometry ||
+        geometry->route != FeedbackGeometryRoute::certified_stagewise_affine_box ||
+        geometry->stages.size() != 2)
+        return false;
+    for (const auto *set : {&geometry->stages[0].forward, &geometry->stages[0].backward,
+                            &geometry->stages[0].intersection})
+        if (!*set || !axis_membership_contains((*set)->membership, {0.2, 0.4}))
+            return false;
+    for (const auto *set : {&geometry->stages[1].forward, &geometry->stages[1].backward,
+                            &geometry->stages[1].intersection})
+        if (!*set || !axis_membership_contains((*set)->membership, {0.25, 0.45}))
+            return false;
     return true;
 }
 }
@@ -528,6 +599,10 @@ int main() {
                 << "Certified orbit projection lost the original midpoint history or its bounded outer result.\n";
             return 37;
         }
+        if (!certified_stagewise_accepts_scaled_box_controls(certified_deps)) {
+            std::cerr << "Certified stagewise rejected scaled box controls.\n";
+            return 42;
+        }
         const auto certified_mode = reachability::FeedbackPolytopeHistory::certified_whole_history;
         const auto certified = reachability::feedback_geometry(
             resolved, {"exact-history"}, box("narrow-terminal", {0.25, 0.375}, {0.375, 0.5}),
@@ -551,6 +626,70 @@ int main() {
             axis_membership_contains(terminal_stage.intersection->membership, {0.45, 0.45}) ||
             !axis_membership_contains(terminal_stage.intersection->membership, {0.3, 0.45}))
             return 33;
+        const auto stagewise_certified = reachability::feedback_geometry(
+            resolved, {"exact-stagewise"}, box("narrow-terminal", {0.25, 0.375}, {0.375, 0.5}),
+            reachability::FeedbackFamily::polytope, {}, certified_deps,
+            reachability::FeedbackPolytopeHistory::certified_stagewise, {});
+        const auto *stagewise_geometry =
+            std::get_if<reachability::FeedbackGeometry>(&stagewise_certified);
+        if (!stagewise_geometry ||
+            stagewise_geometry->route !=
+                reachability::FeedbackGeometryRoute::certified_stagewise_projection ||
+            stagewise_geometry->stages.size() != 2)
+            return 38;
+        const auto &stagewise_terminal = stagewise_geometry->stages[1];
+        if (!stagewise_terminal.forward || !stagewise_terminal.intersection ||
+            !axis_membership_contains(stagewise_terminal.forward->membership, {0.45, 0.45}) ||
+            axis_membership_contains(stagewise_terminal.intersection->membership,
+                                     {0.45, 0.45}) ||
+            !axis_membership_contains(stagewise_terminal.intersection->membership,
+                                      {0.3, 0.45}))
+            return 39;
+        const auto says_exact_projection = [](const reachability::FeedbackSet &set) {
+            return std::any_of(set.construction.begin(), set.construction.end(),
+                               [](const std::string &text) {
+                                   return text.find("Fourier-Motzkin") != std::string::npos;
+                               });
+        };
+        if (!says_exact_projection(*stagewise_terminal.forward))
+            return 40;
+        const auto stagewise_impossible = reachability::feedback_geometry(
+            resolved, {"exact-stagewise-impossible"}, box("impossible-terminal", {2, 2}, {3, 3}),
+            reachability::FeedbackFamily::polytope, {}, certified_deps,
+            reachability::FeedbackPolytopeHistory::certified_stagewise, {});
+        const auto *stagewise_infeasible =
+            std::get_if<reachability::FeedbackGeometry>(&stagewise_impossible);
+        if (!stagewise_infeasible ||
+            stagewise_infeasible->route !=
+                reachability::FeedbackGeometryRoute::certified_stagewise_projection ||
+            !stagewise_infeasible->stages[0].intersection ||
+            axis_membership_contains(stagewise_infeasible->stages[0].intersection->membership,
+                                     {0.2, 0.4}))
+            return 43;
+        const auto universal_state =
+            take(sets::make_universal({{"strict-state"}, 2, {}})).as_handle();
+        Problem strict_source{{"strict-fallback"},
+                              model,
+                              {0, 1},
+                              KnownInitial{{0.2, 0.4}},
+                              ContinuousDomain{{box("strict-u0", {-0.2, -0.1}, {0.3, 0.2})}},
+                              {universal_state, universal_state},
+                              {},
+                              {},
+                              InformationPattern::nominal_open_loop,
+                              QuadraticTerminal{{2, 2, {2, 0, 0, 2}}, {0, 0}, 0}};
+        const auto strict_resolved = take(problem::resolve(
+            strict_source, {problem::UncertaintyStructure::stage_product_uncoupled, {}, {}}));
+        const auto strict_fallback = reachability::feedback_geometry(
+            strict_resolved, {"strict-fallback"}, universal_state,
+            reachability::FeedbackFamily::polytope, {{0, 1e9}}, certified_deps,
+            reachability::FeedbackPolytopeHistory::certified_stagewise, {});
+        const auto *strict_geometry =
+            std::get_if<reachability::FeedbackGeometry>(&strict_fallback);
+        if (!strict_geometry ||
+            strict_geometry->route !=
+                reachability::FeedbackGeometryRoute::certified_stagewise_projection)
+            return 41;
         const auto impossible = reachability::feedback_geometry(
             resolved, {"exact-impossible-terminal"}, box("impossible-terminal", {2, 2}, {3, 3}),
             reachability::FeedbackFamily::polytope, {}, certified_deps, certified_mode, {});

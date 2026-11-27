@@ -67,12 +67,30 @@ struct FeedbackGeometryStage {
     std::optional<FeedbackSet> forward, backward, intersection;
 };
 
+// The route actually taken by feedback_geometry. It is always consistent with
+// the returned memberships and provenance, so a fallback is never reported as
+// a certified shortcut.
+enum class FeedbackGeometryRoute {
+    // Default provider-backed stagewise pipeline.
+    stagewise,
+    // Opt-in whole-history exact projection.
+    certified_whole_history,
+    // Certified stagewise took the exact affine-box support shortcut. All
+    // returned memberships are outer H templates with Assurance::validated.
+    certified_stagewise_affine_box,
+    // Certified stagewise fell back to exact Fourier-Motzkin stagewise
+    // projection. Projections are exact, but the final memberships intersect
+    // provider results and are therefore reported as Assurance::numerical.
+    certified_stagewise_projection,
+};
+
 struct FeedbackGeometry {
     ProblemId problem;
     RequestId request;
     FeedbackFamily family;
     FeedbackScope backward_scope{FeedbackScope::forward_relevant_from_observation};
     std::vector<FeedbackGeometryStage> stages;
+    FeedbackGeometryRoute route{FeedbackGeometryRoute::stagewise};
 };
 enum class FeedbackGeometryPhase { forward, terminal, backward, intersection };
 struct FeedbackGeometryFailure {
@@ -88,7 +106,27 @@ struct FeedbackGeometryFailure {
     std::vector<SetHandle> pending_input_carriers;
 };
 using FeedbackGeometryOutcome = std::variant<FeedbackGeometry, FeedbackGeometryFailure>;
-enum class FeedbackPolytopeHistory { stagewise, certified_whole_history };
+// Selects how polytope feedback geometry is computed.
+//   stagewise                 - default provider-backed pipeline.
+//   certified_whole_history   - projects one exact affine history relation and
+//                               returns outer H enclosures with validated
+//                               provenance.
+//   certified_stagewise       - polytope-only. Uses the exact affine-box
+//                               support shortcut when every closed state and
+//                               terminal set is universal and every control is
+//                               a finite axis-aligned box; otherwise it falls
+//                               back to exact Fourier-Motzkin stagewise
+//                               projection. The shortcut reports
+//                               Assurance::validated; the projection path
+//                               intersects provider results and reports
+//                               Assurance::numerical.
+// FeedbackGeometry::route reports the route actually used, including a
+// fallback, so callers never have to infer it from source data.
+enum class FeedbackPolytopeHistory {
+    stagewise,
+    certified_whole_history,
+    certified_stagewise,
+};
 
 struct FeedbackGeometryDependencies {
     NominalTubeDependencies geometry;
@@ -109,7 +147,8 @@ feedback_geometry(const problem::ResolvedProblem &, RequestId,
                   const std::vector<StrictCoordinateLowerBound> &strict_source_domain,
                   const FeedbackGeometryDependencies &, const ExecutionContext &);
 
-// Certified whole-history mode is an opt-in outer H enclosure of the original affine history.
+// Certified history modes are opt-in outer H enclosures of the original affine
+// history; see FeedbackPolytopeHistory and FeedbackGeometry::route.
 FeedbackGeometryOutcome feedback_geometry(
     const problem::ResolvedProblem &, RequestId, const SetHandle &terminal_feasibility,
     FeedbackFamily, const std::vector<StrictCoordinateLowerBound> &strict_source_domain,
